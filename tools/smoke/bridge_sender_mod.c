@@ -1,17 +1,15 @@
 /*
- * Throwaway Mewjector mod for tools/smoke: prove the CRT-free bridge client
- * reaches a real overlay. It installs no game hooks, so it is safe against the
- * throwaway wintest.exe.
- *
- * Queue key 341 (a real cat in the sample save) and give the worker a moment
- * to deliver it before the host process exits.
+ * Throwaway Mewjector mod for tools/smoke: prove the bidirectional bridge.
+ * Connects, sends focus 341, and logs any select command the overlay sends back.
+ * Uses port 45799 so it never collides with a real overlay on 45780.
  */
 
 #include <windows.h>
 #include "mewjector.h"
 #include "bridge_client.h"
 
-#define TEST_KEY 341
+#define TEST_PORT 45799
+#define TEST_FOCUS_KEY 341
 
 static MewjectorAPI mj;
 
@@ -24,6 +22,10 @@ static void BridgeLog(const char* message) {
     SAY("%s", message);
 }
 
+static void OnSelect(int64_t key) {
+    SAY("smoke: received select key=%lld", (long long)key);
+}
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
@@ -31,11 +33,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         if (!MJ_Require("BridgeSender") || !MJ_Resolve(&mj)) {
             return TRUE;
         }
-        SAY("sender mod: starting bridge client");
-        bridge_client_start(45780, BridgeLog);
-        bridge_client_send_key(TEST_KEY);
-        SAY("sender mod: queued key=%d", TEST_KEY);
-        Sleep(1500);   /* only valid here: let the worker deliver before exit */
+        SAY("sender mod: starting bridge client on port %d", TEST_PORT);
+        bridge_client_start(TEST_PORT, BridgeLog, OnSelect);
+        bridge_client_send_key(TEST_FOCUS_KEY);
+        SAY("sender mod: queued focus key=%d", TEST_FOCUS_KEY);
+        Sleep(4000);   /* let the worker exchange both directions */
     }
     return TRUE;
 }

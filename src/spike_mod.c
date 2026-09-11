@@ -36,6 +36,18 @@
 #define MEWSAVEFILE_LOAD_STOLEN_BYTES 15
 
 #define RVA_SET_CURRENT_CAT 0xEBBA0u
+#define RVA_CAT_UI_SETUP 0xE9AC0u
+
+/* House cat list: the scene's component array is at manager+0x20, one entry per
+ * type (0x10 bytes each). Type 0x448 is the House cat list: count at +0xc,
+ * pointer array at +0x10, entries are cats with their key at +0x80. */
+#define HOUSE_SCENE_HOLDER_OFFSET 0x18u
+#define HOUSE_SCENE_MANAGER_OFFSET 0x08u
+#define SCENE_COMPONENT_ARRAY_OFFSET 0x20u
+#define COMPONENT_STRIDE 0x10u
+#define HOUSE_CATS_COMPONENT_TYPE 0x448u
+#define COMPONENT_COUNT_OFFSET 0x0Cu
+#define COMPONENT_DATA_OFFSET 0x10u
 
 /* CatData layout (Custom Stray Framework reversed struct):
  *   +0x018  WideString name
@@ -61,6 +73,12 @@ static fn_load_catdata g_orig_load_catdata = NULL;
 
 typedef void (__cdecl *fn_set_current_cat)(void* house, void* cat, unsigned char flag);
 static fn_set_current_cat g_orig_set_current_cat = NULL;
+
+typedef void (__cdecl *fn_cat_ui_setup)(void* house);
+static fn_cat_ui_setup g_orig_cat_ui_setup = NULL;
+
+/* The CatMenu controller, cached when the game sets up the cat UI. */
+static void* volatile g_house = NULL;
 
 /* Formatting is Mewjector's job; we only pass varargs through. */
 #define SAY(...) \
@@ -123,6 +141,7 @@ static void __cdecl HookLoadCatData(void* self, int64_t key, void* cat_data) {
 /* ── hook 2: current cat (CatMenu selection) ─────────────────────────────── */
 
 static void __cdecl HookSetCurrentCat(void* house, void* cat, unsigned char flag) {
+    if (house) g_house = house;
     if (cat) {
         __try {
             const unsigned char* obj = (const unsigned char*)cat;
@@ -148,6 +167,78 @@ static void __cdecl HookSetCurrentCat(void* house, void* cat, unsigned char flag
     if (g_orig_set_current_cat) {
         g_orig_set_current_cat(house, cat, flag);
     }
+}
+
+/* ── hook 3: cache the house controller, and select a cat on request ─────── */
+
+static void __cdecl HookCatUiSetup(void* house) {
+    g_house = house;
+    SAY("house cached at UI setup: %llX", (unsigned long long)(uintptr_t)house);
+    if (g_orig_cat_ui_setup) {
+        g_orig_cat_ui_setup(house);
+    }
+}
+
+/* Find the house cat with *key* and make it the CatMenu's current cat. */
+static int SelectCatByKey(int64_t key) {
+    void* house = g_house;
+    int found = 0;
+
+    if (!house) {
+        SAY("select key=%lld: house not cached yet (no house cat UI?)", (long long)key);
+        return 0;
+    }
+
+    __try {
+        unsigned char* holder = *(unsigned char**)((unsigned char*)house + HOUSE_SCENE_HOLDER_OFFSET);
+        unsigned char* manager = holder
+            ? *(unsigned char**)(holder + HOUSE_SCENE_MANAGER_OFFSET) : NULL;
+        unsigned char* comp_array = manager
+            ? *(unsigned char**)(manager + SCENE_COMPONENT_ARRAY_OFFSET) : NULL;
+        unsigned char* component = comp_array
+            ? *(unsigned char**)(comp_array + HOUSE_CATS_COMPONENT_TYPE * COMPONENT_STRIDE)
+            : NULL;
+        unsigned char** data;
+        uint32_t count;
+        uint32_t i;
+
+        if (!component) {
+            SAY("select key=%lld: house cat list not found", (long long)key);
+            return 0;
+        }
+
+        data = *(unsigned char***)(component + COMPONENT_DATA_OFFSET);
+        count = *(uint32_t*)(component + COMPONENT_COUNT_OFFSET);
+        SAY("select key=%lld: house cat list has %u entries", (long long)key, count);
+
+        for (i = 0; i < count && data; i++) {
+            unsigned char* cat = data[i];
+            int64_t cat_key;
+            if (!cat) continue;
+            cat_key = *(int64_t*)(cat + HOUSE_CAT_KEY_OFFSET);
+            if (cat_key == key) {
+                SAY("select key=%lld: found at index %u, applying", (long long)key, i);
+                if (g_orig_set_current_cat) {
+                    g_orig_set_current_cat(house, cat, 1);
+                    found = 1;
+                }
+                break;
+            }
+        }
+        if (!found) {
+            SAY("select key=%lld: key not present in the house cat list", (long long)key);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        SAY("select key=%lld: guarded read fault", (long long)key);
+        return 0;
+    }
+    return found;
+}
+
+static void OnSelectCommand(int64_t key) {
+    SAY("overlay asked to select key=%lld", (long long)key);
+    SelectCatByKey(key);
 }
 
 /* ── init ────────────────────────────────────────────────────────────────── */
@@ -188,8 +279,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         InstallProbe("current-cat", RVA_SET_CURRENT_CAT, 0,
                      (void*)HookSetCurrentCat,
                      (void**)&g_orig_set_current_cat);
+        InstallProbe("cat-ui-setup", RVA_CAT_UI_SETUP, 15,
+                     (void*)HookCatUiSetup,
+                     (void**)&g_orig_cat_ui_setup);
 
-        bridge_client_start(45780, BridgeLog);
+        bridge_client_start(45780, BridgeLog, OnSelectCommand);
 
         if (g_mj.VerifyHooks) {
             SAY("verify hooks -> %d corrupted", g_mj.VerifyHooks());

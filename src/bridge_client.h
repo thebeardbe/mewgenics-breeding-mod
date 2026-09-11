@@ -1,15 +1,13 @@
 /*
- * bridge_client — send focus requests to the Mewgenics Breeding Overlay.
+ * bridge_client — talk to the Mewgenics Breeding Overlay over loopback TCP.
  *
- * A tiny, CRT-free client: the mod hooks a game function, calls
- * bridge_client_send_key(key), and a background thread does the JSON POST over
- * loopback TCP. Nothing here may block the game thread, so all socket work
- * happens on the worker.
+ * Bidirectional, one persistent connection:
+ *   mod -> overlay   {"v":1,"type":"focus","key":341}\n   (a cat was selected)
+ *   overlay -> mod   {"v":1,"type":"select","key":341}\n  (show this cat in game)
  *
- * Winsock is resolved dynamically (LoadLibraryA + GetProcAddress) so the DLL
- * keeps importing only KERNEL32, matching the rest of the mod. If the overlay
- * is not running the connect simply fails; the request is dropped and the
- * failure is logged once per state change, never on every selection.
+ * A single worker thread owns the socket. The game thread only ever sets a
+ * pending key, so nothing here can stall a frame. Winsock is resolved
+ * dynamically so the DLL keeps importing only KERNEL32.
  */
 
 #ifndef BREEDING_BRIDGE_CLIENT_H
@@ -20,10 +18,13 @@
 /*: Called from the worker thread with a short English message. */
 typedef void (*bridge_log_fn)(const char* message);
 
-/*: Start the worker. Idempotent; the first call wins. */
-void bridge_client_start(int port, bridge_log_fn log_fn);
+/*: Called from the worker thread when the overlay asks to select a cat. */
+typedef void (*bridge_select_fn)(int64_t key);
 
-/*: Queue a cat key for delivery. Non-blocking; safe from any thread. */
+/*: Start the worker (idempotent). */
+void bridge_client_start(int port, bridge_log_fn log_fn, bridge_select_fn on_select);
+
+/*: Queue "this cat is selected" for delivery. Non-blocking. */
 void bridge_client_send_key(int64_t key);
 
 #endif /* BREEDING_BRIDGE_CLIENT_H */

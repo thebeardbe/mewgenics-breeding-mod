@@ -422,6 +422,24 @@ The earlier candidates were wrong and are removed: `CatSelector::init`
 
 Still open from the list above: the cat-select-in-game (overlay to game) path.
 
+**Reverse direction (overlay -> game). [V]** Selecting a cat in game is one call:
+`set_current_cat(house, cat, 1)`. To find `cat` from a key:
+
+- The house controller (the CatMenu object) is cached by hooking the cat UI
+  setup at RVA `0xE9AC0` (`rcx` is the house at entry; clean 15-byte prologue).
+- `scene_manager = *(*(house+0x18)+0x8)`.
+- `comp_array = *(scene_manager+0x20)`; components are one `0x10`-byte entry per
+  type. The House cat list is type `0x448`: `count` at `+0xc`, pointer array at
+  `+0x10`.
+- Each entry is a house cat with its key at `+0x80`.
+
+The bridge is now bidirectional on one persistent connection: the mod sends
+`{"v":1,"type":"focus","key":N}` and reads
+`{"v":1,"type":"select","key":N}` back. Validated locally under Wine: the mod
+sent focus 341, the server replied select 423, and the mod logged
+`smoke: received select key=423`. The in-game apply (find cat, call
+`set_current_cat`) still needs a game session to confirm.
+
 ## 10. References
 
 Repos (all MIT unless noted):
