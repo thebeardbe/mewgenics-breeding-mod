@@ -1,23 +1,30 @@
 # PR kit: Mewjector `EnableEPFallback` opt-out + honour `Logging=0`
 
-Everything here is ready to use. Nothing has been posted anywhere.
+Everything here is ready. Nothing has been posted anywhere.
 
 - Upstream: `githubuser508/mewjector`, default branch `main`
 - Verified base: `ccdd681` (upstream `main` at the time of writing)
-- Patch (one commit): `patches/mewjector-epfallback-and-logging.patch`
-- Patch (two commits, recommended): `patches/mewjector-01-honour-logging-flag.patch` then `patches/mewjector-02-enable-ep-fallback-optout.patch`
-- Both apply with `git apply` from the repo root and produce identical trees
+- Patch: `patches/mewjector-epfallback-and-logging.patch` (one commit)
 - Issue text: `docs/upstream-mewjector-startup-hang.md`
 
 ## What the change does
 
-1. `Chainloader/EnableEPFallback` (default `1`). Set to `0` to skip
-   `PatchEntryPointFallback()`. Mods then load on the game's first `version.dll`
-   proxy call. This avoids the entry-point patch race that intermittently hangs
-   startup under Proton.
-2. `Logging=0` now works. It was parsed into `g_config.logging` but never read.
-   A flag is set before the log file is opened, so `Logging=0` produces no log
-   output and creates no log file.
+1. **`Chainloader/EnableEPFallback`** (default `1`, unchanged behaviour). Set to
+   `0` to skip `PatchEntryPointFallback()`. Mods then load on the game's first
+   `version.dll` proxy call, which avoids the entry-point patch race that
+   intermittently hangs startup under Proton. Setting it to `0` logs a WARNING
+   naming the risk: if the game never calls a `version.dll` export, no mods load.
+2. **`Logging=0` now works.** It was parsed into `g_config.logging` but never
+   read. The flag is now read before the log file is opened, so `Logging=0`
+   creates no log file and writes no log output. Crash reports under
+   `mod_logs/crashes` are separate and are still written.
+3. **Boolean ini values are parsed consistently.** A small `ParseBoolFlag`
+   helper is shared by `Enabled`, `Logging`, `EnableEPFallback` and
+   `ScanGameDir`. Values accept `1/y/yes` or `0/n/no`, and a blank value keeps
+   the key's default. This removes a duplicated parse between the pre-open read
+   and `LoadConfig`.
+
+Defaults for users who change nothing are identical to before.
 
 ## Exact steps
 
@@ -29,55 +36,36 @@ cd mewjector
 # 2. branch
 git checkout -b fix/ep-fallback-optout-and-logging
 
-# 3a. two commits (recommended)
-git apply /path/to/mewgenics-breeding-mod/patches/mewjector-01-honour-logging-flag.patch
-git add version.c
-git commit -m "Honour Chainloader/Logging: Logging=0 now writes nothing"
-
-git apply /path/to/mewgenics-breeding-mod/patches/mewjector-02-enable-ep-fallback-optout.patch
+# 3. apply the patch
+git apply /path/to/mewgenics-breeding-mod/patches/mewjector-epfallback-and-logging.patch
 git add version.c chainloader.ini
-git commit -m "Add Chainloader/EnableEPFallback to skip the entry-point patch"
 
-# 3b. or one commit
-# git apply /path/to/mewgenics-breeding-mod/patches/mewjector-epfallback-and-logging.patch
-# git add version.c chainloader.ini
-# git commit -m "Add EnableEPFallback opt-out and honour Logging=0"
-
-# 4. build exactly as the README says (MSVC)
-build.bat        # produces version.dll
-
-# 5. push and open the PR
-git push -u origin fix/ep-fallback-optout-and-logging
-```
-
-Then open the PR against `main` with the title and body below.
-
-## Commit messages
-
-Commit 1:
-
-```
-Honour Chainloader/Logging: Logging=0 now writes nothing
-
-Logging was parsed into g_config.logging but never read, so Logging=0 had no
-effect. Read the flag before opening the log file so it produces no output and
-creates no file.
-```
-
-Commit 2:
-
-```
-Add Chainloader/EnableEPFallback to skip the entry-point patch
+# 4. commit
+git commit -F- <<'MSG'
+Add Chainloader/EnableEPFallback opt-out and honour Logging=0
 
 On some Proton/Wine setups, patching the game's PE entry point races with game
 startup: the process can hang before any mod loads, with the log ending after
-[EP-fallback] Entry point restored. Add an ini opt-out (default 1, unchanged
-behaviour). With EnableEPFallback=0, mods load on the first version.dll proxy
-call instead.
+[EP-fallback] Entry point restored.
 
-See also issue #4 (explicit init entry point), which removes the need for the
-patch entirely.
+- Chainloader/EnableEPFallback (default 1, unchanged). 0 skips the patch; mods
+  load on the first version.dll proxy call. A WARNING states the risk.
+- Logging was parsed but never read. Read it before opening the log file so
+  Logging=0 creates no file and writes nothing. Crash reports under
+  mod_logs/crashes remain separate.
+- Parse booleans through one helper; blank keeps the default.
+
+See also issue #4 (explicit init entry point).
+MSG
+
+# 5. build exactly as the README says (MSVC)
+build.bat        # produces version.dll
+
+# 6. push and open the PR
+git push -u origin fix/ep-fallback-optout-and-logging
 ```
+
+Open the PR against `main` with the title and body below.
 
 ## PR title
 
@@ -114,18 +102,24 @@ The VEH is not the suspect: `MjVectoredFilter` always returns
 
 - `Chainloader/EnableEPFallback` (default 1, no behaviour change). `0` skips
   `PatchEntryPointFallback()`; mods load on the first `version.dll` proxy call.
+  A WARNING names the risk when disabled.
 - `Logging=0` now has an effect. It was parsed but never read. The flag is read
-  before the log file is opened, so no output and no file are produced.
+  before the log file is opened, so no file and no output are produced. Crash
+  reports under `mod_logs/crashes` are separate and still written.
+- Booleans go through one `ParseBoolFlag` helper; a blank value keeps the
+  default (previously the inline parses disagreed on empty values).
 
 ## Evidence
 
-- Patch applies to `main` at `ccdd681`.
+- Patch applies cleanly to `main` at `ccdd681`.
 - Built with MSVC per the README; exports unchanged (43 entries).
 - Wine harness, same mod and one proxy call in every case:
-  - `EnableEPFallback=1, Logging=1`: entry patched, first proxy call, mod loaded
-  - `EnableEPFallback=0, Logging=1`: no entry patch, "Entry-point fallback
-    disabled", first proxy call, mod loaded
+  - `EnableEPFallback=1, Logging=1`: entry patched, mod loaded, log written
+  - `EnableEPFallback=0, Logging=1`: no entry patch, WARNING logged, mod loaded
   - `Logging=0`: no log file created
+  - `Logging=` (blank): default 1, log written
+  - `EnableEPFallback=` (blank): default 1, entry patched
+  - `EnableEPFallback=no, Logging=yes`: fallback skipped, log written
 - Reporter tested `EnableEPFallback=0` on the affected machine and launches
   became consistent.
 

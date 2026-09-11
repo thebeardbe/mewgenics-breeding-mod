@@ -83,17 +83,21 @@ whatever was logged before the deadlock.
 
 ## Suggested directions
 
-A patch implementing (2) and (3) is provided:
-`patches/mewjector-epfallback-and-logging.patch` (applies to the repo root with
-`git apply`). It adds a `Chainloader/EnableEPFallback` ini key (default `1`; set
-`0` to skip the entry-point patch) and makes `Logging=0` actually suppress log
-output via an early flag in `LogWriteRaw`.
+A patch implementing (2) and (3) is provided, and verified to apply to `main` at
+`ccdd681`: `patches/mewjector-epfallback-and-logging.patch`.
+
+It adds a `Chainloader/EnableEPFallback` ini key (default `1`; set `0` to skip
+the entry-point patch) and makes `Logging=0` produce no output and no log file
+(crash reports under `mod_logs/crashes` remain separate). Boolean values accept
+`1/y/yes` or `0/n/no`, and a blank value keeps the default. Wine verification:
+with `EnableEPFallback=0` and no entry patch, the mod still loads on the first
+`version.dll` proxy call.
 
 1. Implement #4: an explicit opt-in init entry point so the entry patch is not
    needed when a mod (or Mewtator) can trigger loading.
 2. Or make the entry-point fallback opt-out via `chainloader.ini`
-   (included in the patch above).
-3. Honour `Logging=0` in `CLog`/`LogWriteRaw` (included in the patch above).
+   (included in the patches above).
+3. Honour `Logging=0` (included in the patches above).
 4. Optionally reduce work inside the VEH for near-null access violations at
    startup (module enumeration + a 96-slot stack walk happens on the faulting
    thread).
