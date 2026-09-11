@@ -21,7 +21,8 @@ game internals we have reversed, the RVAs, and the open questions.
 | The overlay's `db_key` is the game's cat key | `MewSaveFile::Load` stores its `__int64` key into `CatData.sqlKey` at RVA `0x230101`; confirmed in-game: 18/18 logged cats matched the overlay's save parse |
 | The mod loads in the real game under Proton | `mod_logs/chainloader.log`: loader, API, hook install, `Integrity check: ALL OK` |
 | The mod can reach the overlay | `src/bridge_client.c` (CRT-free Winsock, dynamic `ws2_32`) validated locally: a Wine mod queued key 341 and the overlay logged `bridge: focusing cat key=341` |
-| In-game selection drives the overlay live | hook on `set_current_cat` (RVA `0xEBBA0`): click Bert logged `selected cat key=423`, and the overlay logged `bridge: focusing cat key=423` 178 ms later; next/previous tracked too |
+| In-game selection drives the overlay live | hook on `set_current_cat` (RVA `0xEBBA0`): click Bert logged `selected cat key=423`, and the overlay logged `bridge: focusing cat key=423` 74 ms later; next/previous tracked too |
+| The overlay can select a cat in game | `Ctrl+G` sent key 407; the mod logged `house cat list has 18 entries` / `found at index 7, applying` and the game switched cats |
 | Achievements are not permanently disabled | `disable_achievements` is only ever read; see `RESEARCH.md` |
 
 Not yet proven: the cat-select-in-game path (overlay to game), and the MewUI

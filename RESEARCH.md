@@ -435,10 +435,24 @@ Still open from the list above: the cat-select-in-game (overlay to game) path.
 
 The bridge is now bidirectional on one persistent connection: the mod sends
 `{"v":1,"type":"focus","key":N}` and reads
-`{"v":1,"type":"select","key":N}` back. Validated locally under Wine: the mod
-sent focus 341, the server replied select 423, and the mod logged
-`smoke: received select key=423`. The in-game apply (find cat, call
-`set_current_cat`) still needs a game session to confirm.
+`{"v":1,"type":"select","key":N}` back.
+
+**Proven in-game (2026-09-11). [V]** Game -> overlay: selecting a cat logged
+`selected cat key=367` and the overlay focused key 367 74 ms later. Overlay ->
+game (`Ctrl+G`): `overlay asked to select key=407`, then
+`select key=407: house cat list has 18 entries` and
+`found at index 7, applying`; the game switched cats. Both directions confirmed
+with no crashes.
+
+One layout correction: the CatData is stored on the **CatVisual**
+(`house+0x48`, then `+0x8A8`), not on the cat object passed to `set_current_cat`.
+The cat object's key at `+0x80` is correct; name lookups should use the roster
+captured at save load or the CatVisual, not `cat+0x8A8`.
+
+Also important: this DLL is built `-nostdlib`, so `__try/__except` is **not**
+reliable here (an access violation escaped it and crashed the game). Validate
+game pointers with `VirtualQuery` before dereferencing, and read fields the
+original fills only after calling it.
 
 ## 10. References
 
