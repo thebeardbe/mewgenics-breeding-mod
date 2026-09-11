@@ -184,6 +184,102 @@ static void InstallCatSelectorProbe(void) {
         RVA_CATSELECTOR_INIT, CATSELECTOR_INIT_STOLEN_BYTES);
 }
 
+/* ── discovery probe: nametag click ───────────────────────────────────────────
+ * house.swf's `nametag_button` is bound to a callback object; its invoke at RVA
+ * 0xEDCA0 runs when the player clicks a cat's nametag. That object holds two
+ * captured pointers, and the handler forwards *(capture1+0x20) into the cat
+ * menu path (0x14074E6C0). We do not yet know which of those points at the
+ * cat, so this logs candidate fields and lets one click identify it. Every read
+ * is guarded. */
+#define RVA_NAMETAG_CLICK 0xEDCA0u
+
+typedef void (__cdecl *fn_nametag_click)(void* callback_obj);
+static fn_nametag_click g_orig_nametag_click = NULL;
+
+static void ProbeCandidate(const char* label, const unsigned char* p) {
+    if (!p) {
+        SAY("  %s = null", label);
+        return;
+    }
+    __try {
+        SAY("  %s = %llX: [+0x18]=%llX [+0x20]=%llX [+0xC48]=%lld [+0x8A8]=%llX",
+            label,
+            (unsigned long long)(uintptr_t)p,
+            (unsigned long long)*(const uint64_t*)(p + 0x18),
+            (unsigned long long)*(const uint64_t*)(p + 0x20),
+            (long long)*(const int64_t*)(p + 0xC48),
+            (unsigned long long)*(const uint64_t*)(p + 0x8A8));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        SAY("  %s = %llX: read fault", label, (unsigned long long)(uintptr_t)p);
+    }
+}
+
+static void __cdecl HookNametagClick(void* callback_obj) {
+    unsigned char* obj = (unsigned char*)callback_obj;
+    void* capture1 = NULL;
+    void* capture2 = NULL;
+    void* target = NULL;
+
+    SAY("nametag click obj=%llX", (unsigned long long)(uintptr_t)obj);
+
+    __try {
+        if (obj) {
+            capture1 = *(void**)(obj + 0x8);
+            capture2 = *(void**)(obj + 0x10);
+        }
+        if (capture1) {
+            target = *(void**)((unsigned char*)capture1 + 0x20);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        SAY("  nametag header read fault");
+    }
+
+    ProbeCandidate("obj", obj);
+    ProbeCandidate("capture1", (const unsigned char*)capture1);
+    ProbeCandidate("capture2", (const unsigned char*)capture2);
+    ProbeCandidate("target", (const unsigned char*)target);
+
+    if (target) {
+        __try {
+            void* catdata = *(void**)((unsigned char*)target + 0x8A8);
+            ProbeCandidate("target+0x8A8", (const unsigned char*)catdata);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            SAY("  target+0x8A8 read fault");
+        }
+    }
+
+    if (g_orig_nametag_click) {
+        g_orig_nametag_click(callback_obj);
+    }
+}
+
+static void InstallNametagProbe(void) {
+    void* trampoline = NULL;
+    int ok;
+
+    /* stolenBytes 0: Mewjector decodes the prologue (push rsi / sub rsp,0x20 /
+     * mov rax,[rcx+8] / mov rsi,rcx / mov byte [rax+0x71],1 == 16 bytes). */
+    ok = g_mj.InstallHook(
+        RVA_NAMETAG_CLICK,
+        0,
+        (void*)HookNametagClick,
+        &trampoline,
+        20,
+        MOD_NAME);
+
+    if (!ok) {
+        SAY("FATAL: InstallHook(0x%X) failed; nametag probe disabled",
+            RVA_NAMETAG_CLICK);
+        return;
+    }
+
+    g_orig_nametag_click = (fn_nametag_click)trampoline;
+    SAY("nametag probe installed: hook rva=0x%X", RVA_NAMETAG_CLICK);
+}
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
     (void)reserved;
     (void)module;
@@ -203,6 +299,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         InstallCatProbe();
         bridge_client_start(45780, BridgeLog);
         InstallCatSelectorProbe();
+        InstallNametagProbe();
 
         if (g_mj.VerifyHooks) {
             SAY("verify hooks -> %d corrupted", g_mj.VerifyHooks());
