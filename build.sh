@@ -55,8 +55,8 @@ build_mod() {
     $MINGW_INCLUDES -lkernel32 \
     -Wl,--entry,DllMain \
     -o "$OUT/BreedingSpike.dll" \
-    src/spike_mod.c \
-    -I"$UP/mewjector" -I"$UP/mewui"
+    src/spike_mod.c src/bridge_client.c \
+    -I"$UP/mewjector" -I"$UP/mewui" -Isrc
 }
 
 what="${1:-all}"

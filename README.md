@@ -20,6 +20,7 @@ game internals we have reversed, the RVAs, and the open questions.
 | MewUI's RVAs match this game build | `mewgenics-ui-api`'s resolver matches every symbol against build `25143593` |
 | The overlay's `db_key` is the game's cat key | `MewSaveFile::Load` stores its `__int64` key into `CatData.sqlKey` at RVA `0x230101`; confirmed in-game: 18/18 logged cats matched the overlay's save parse |
 | The mod loads in the real game under Proton | `mod_logs/chainloader.log`: loader, API, hook install, `Integrity check: ALL OK` |
+| The mod can reach the overlay | `src/bridge_client.c` (CRT-free Winsock, dynamic `ws2_32`) validated locally: a Wine mod queued key 341 and the overlay logged `bridge: focusing cat key=341` |
 | Achievements are not permanently disabled | `disable_achievements` is only ever read; see `RESEARCH.md` |
 
 Not yet proven: the cat-select-in-game path (overlay to game), and the MewUI
@@ -30,8 +31,9 @@ button.
 ```
 build.sh              build dist/version.dll + dist/BreedingSpike.dll
 flake.nix, shell.nix  dev shell (zig, python3, binutils, git)
-src/spike_mod.c       the M0 probe (hooks MewSaveFile::Load, logs cat key/name)
-tools/smoke/          Wine smoke test for the loader pipeline
+src/spike_mod.c       probe: MewSaveFile::Load (roster) + CatSelector::init (selection)
+src/bridge_client.c   CRT-free Winsock sender: focus requests to the overlay
+tools/smoke/          Wine tests for the loader pipeline and the sender
 vendor/sync.sh        fetch pinned mewjector + mewui revisions
 RESEARCH.md           findings, RVAs, references
 ```

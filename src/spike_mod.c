@@ -26,6 +26,7 @@
 #include <stdint.h>
 
 #include "mewjector.h"
+#include "bridge_client.h"
 
 #define MOD_NAME "BreedingSpike"
 
@@ -114,6 +115,10 @@ static void __cdecl HookLoadCatData(void* self, int64_t key, void* cat_data) {
 
 /* ── init ────────────────────────────────────────────────────────────────── */
 
+static void BridgeLog(const char* message) {
+    SAY("%s", message);
+}
+
 static void InstallCatProbe(void) {
     void* trampoline = NULL;
     int ok;
@@ -136,6 +141,49 @@ static void InstallCatProbe(void) {
         RVA_MEWSAVEFILE_LOAD_CATDATA, MEWSAVEFILE_LOAD_STOLEN_BYTES, trampoline);
 }
 
+/* ── selection probe ─────────────────────────────────────────────────────────
+ * glaiel::CatSelector::init(__int64 key): the game initialises a cat selector
+ * with the cat's key when the player opens a cat (the nametag click path ends
+ * up here). RVA from the function's assert signature. The prologue keeps the
+ * key in r15 and its shadow-space reads stay consistent under Mewjector's
+ * trampoline, same shape as the MewSaveFile::Load hook above. */
+#define RVA_CATSELECTOR_INIT 0xDE040u
+#define CATSELECTOR_INIT_STOLEN_BYTES 15
+
+typedef void (__cdecl *fn_catsel_init)(void* self, int64_t key);
+static fn_catsel_init g_orig_catsel_init = NULL;
+
+static void __cdecl HookCatSelectorInit(void* self, int64_t key) {
+    SAY("catselector init key=%lld", (long long)key);
+    bridge_client_send_key(key);
+    if (g_orig_catsel_init) {
+        g_orig_catsel_init(self, key);
+    }
+}
+
+static void InstallCatSelectorProbe(void) {
+    void* trampoline = NULL;
+    int ok;
+
+    ok = g_mj.InstallHook(
+        RVA_CATSELECTOR_INIT,
+        CATSELECTOR_INIT_STOLEN_BYTES,
+        (void*)HookCatSelectorInit,
+        &trampoline,
+        20,
+        MOD_NAME);
+
+    if (!ok) {
+        SAY("FATAL: InstallHook(0x%X) failed; selection probe disabled",
+            RVA_CATSELECTOR_INIT);
+        return;
+    }
+
+    g_orig_catsel_init = (fn_catsel_init)trampoline;
+    SAY("selection probe installed: hook rva=0x%X stolen=%d",
+        RVA_CATSELECTOR_INIT, CATSELECTOR_INIT_STOLEN_BYTES);
+}
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
     (void)reserved;
     (void)module;
@@ -153,6 +201,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
             (unsigned long long)(g_mj.GetGameBase ? g_mj.GetGameBase() : 0));
 
         InstallCatProbe();
+        bridge_client_start(45780, BridgeLog);
+        InstallCatSelectorProbe();
 
         if (g_mj.VerifyHooks) {
             SAY("verify hooks -> %d corrupted", g_mj.VerifyHooks());
