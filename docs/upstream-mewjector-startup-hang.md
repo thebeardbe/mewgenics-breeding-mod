@@ -101,15 +101,3 @@ with `EnableEPFallback=0` and no entry patch, the mod still loads on the first
 4. Optionally reduce work inside the VEH for near-null access violations at
    startup (module enumeration + a 96-slot stack walk happens on the faulting
    thread).
-
-## Offer
-
-Happy to test patched builds on this machine and report back. We can also
-provide a repeated-launch harness log showing the good and hung cases side by
-side.
-
-## Extra context
-
-The consuming project is a Mewgenics breeding overlay bridge (mod side:
-`mewgenics-breeding-mod`). The mod only installs read-only hooks and does no
-work in the failing case, so the hang is reproducible independently of it.

@@ -1,0 +1,14 @@
+Add Chainloader/EnableEPFallback opt-out and honour Logging=0
+
+On some Proton/Wine setups, patching the game's PE entry point races with game
+startup: the process can hang before any mod loads, with the log ending after
+[EP-fallback] Entry point restored.
+
+- Chainloader/EnableEPFallback (default 1, unchanged). 0 skips the patch; mods
+  load on the first version.dll proxy call. A WARNING states the risk.
+- Logging was parsed but never read. Read it before opening the log file so
+  Logging=0 creates no file and writes nothing. Crash reports under
+  mod_logs/crashes remain separate.
+- Parse booleans through one helper; blank keeps the default.
+
+See also #4 (explicit init entry point).

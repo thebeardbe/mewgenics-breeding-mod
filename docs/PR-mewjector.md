@@ -28,6 +28,19 @@ Defaults for users who change nothing are identical to before.
 
 ## Exact steps
 
+Shortcut: `tools/publish/publish_pr.py` does all of this in one command (fork,
+commit, push, issue, PR) and is idempotent. Run it with a classic token that has
+the `public_repo` scope:
+
+```bash
+GITHUB_TOKEN=<token> nix shell nixpkgs#git nixpkgs#python3 --command \
+  python3 tools/publish/publish_pr.py --dry-run   # checks only
+GITHUB_TOKEN=<token> nix shell nixpkgs#git nixpkgs#python3 --command \
+  python3 tools/publish/publish_pr.py             # publishes
+```
+
+Or do it by hand:
+
 ```bash
 # 1. fork on GitHub, then clone your fork
 git clone git@github.com:<you>/mewjector.git
@@ -107,7 +120,10 @@ The VEH is not the suspect: `MjVectoredFilter` always returns
   before the log file is opened, so no file and no output are produced. Crash
   reports under `mod_logs/crashes` are separate and still written.
 - Booleans go through one `ParseBoolFlag` helper; a blank value keeps the
-  default (previously the inline parses disagreed on empty values).
+  default (previously the inline parses disagreed on empty values). One
+  existing-key note: a present-but-blank `Enabled=` now keeps the default
+  (enabled) instead of disabling the chainloader. `ScanGameDir=` is unchanged
+  (blank still means off).
 
 ## Evidence
 
