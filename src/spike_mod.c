@@ -80,6 +80,11 @@ static fn_cat_ui_setup g_orig_cat_ui_setup = NULL;
 /* The CatMenu controller, cached when the game sets up the cat UI. */
 static void* volatile g_house = NULL;
 
+/* Prologue byte count for 0xE9AC0: push rbp (2, REX-prefixed) + push rbx/rsi/rdi
+ * (3) + push r12/r13/r14/r15 (8) = 13, then lea rbp,[rsp-0x398] (8) = 21. A
+ * 15-byte steal lands inside the lea and executes as an illegal instruction. */
+#define CAT_UI_SETUP_STOLEN_BYTES 21
+
 /* Formatting is Mewjector's job; we only pass varargs through. */
 #define SAY(...) \
     do { \
@@ -279,7 +284,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         InstallProbe("current-cat", RVA_SET_CURRENT_CAT, 0,
                      (void*)HookSetCurrentCat,
                      (void**)&g_orig_set_current_cat);
-        InstallProbe("cat-ui-setup", RVA_CAT_UI_SETUP, 15,
+        InstallProbe("cat-ui-setup", RVA_CAT_UI_SETUP, CAT_UI_SETUP_STOLEN_BYTES,
                      (void*)HookCatUiSetup,
                      (void**)&g_orig_cat_ui_setup);
 
