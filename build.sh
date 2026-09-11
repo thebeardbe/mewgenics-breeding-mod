@@ -4,6 +4,7 @@
 #   ./build.sh                    # dist/version.dll (official) + BreedingSpike.dll
 #   ./build.sh mod                # only our mod DLL
 #   ./build.sh loader             # only the official version.dll + chainloader.ini
+#   ./build.sh loader --patched   # build version.dll from source + our patch (test only)
 #   ./build.sh loader --from-source   # build Mewjector from source with zig (NOT Proton-safe)
 #
 # Two hard-won rules live here:
@@ -36,7 +37,22 @@ OUT="dist"
 mkdir -p "$OUT"
 
 build_loader() {
-  if [ "${1:-}" = "--from-source" ]; then
+  local mode="${1:-}"
+  if [ "$mode" = "--patched" ]; then
+    echo "==> version.dll (Mewjector, patched: EnableEPFallback + Logging)"
+    local work="$OUT/.mewjector-patched"
+    rm -rf "$work"
+    mkdir -p "$work"
+    cp -r "$UP/mewjector" "$work/mewjector"
+    patch -p1 -d "$work" < "$PWD/patches/mewjector-epfallback-and-logging.patch"
+    $ZIG cc $TARGET $CFLAGS -shared \
+      -o "$OUT/version.dll" \
+      "$work/mewjector/version.c" "$work/mewjector/version.def"
+    cp "$work/mewjector/chainloader.ini" "$OUT/chainloader.ini"
+    return
+  fi
+
+  if [ "$mode" = "--from-source" ]; then
     echo "==> version.dll (Mewjector, built from source with zig)"
     echo "    WARNING: imports api-ms-win-crt-*; crashes the game under Proton."
     $ZIG cc $TARGET $CFLAGS -shared \

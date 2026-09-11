@@ -1,0 +1,93 @@
+--- a/mewjector/version.c
++++ b/mewjector/version.c
+@@ -54,6 +54,7 @@
+ static FILE*  g_logFile   = NULL;
+ static HANDLE g_logMutex  = NULL;
+ static HANDLE g_logHandle = INVALID_HANDLE_VALUE; /* raw HANDLE for WriteFile; avoids CRT FILE-stream lock */
++static int    g_logEnabled = 1;                   /* mirrors Chainloader/Logging */
+ 
+ static void LogOpen(void)
+ {
+@@ -97,6 +98,7 @@
+ static void LogWriteRaw(const char* buf, int n)
+ {
+     if (g_logHandle == INVALID_HANDLE_VALUE || n <= 0) return;
++    if (!g_logEnabled) return;
+     BOOL held = (g_logMutex &&
+                  WaitForSingleObject(g_logMutex, 0) == WAIT_OBJECT_0);
+     DWORD written;
+@@ -149,6 +151,7 @@
+ typedef struct {
+     int  enabled;            /* Master switch                            */
+     int  logging;            /* Whether to log (already open by now)     */
++    int  epFallback;         /* Patch the PE entry point (default 1)     */
+     char scanPath[MAX_PATH]; /* Directory to scan for DLLs (relative)    */
+     int  scanGameDir;        /* Also scan the exe's own directory        */
+     char manifest[MAX_PATH]; /* Mewtator manifest path (abs or relative) */
+@@ -183,6 +186,7 @@
+     /* Defaults — these apply if no ini exists */
+     g_config.enabled        = 1;
+     g_config.logging        = 1;
++    g_config.epFallback     = 1;
+     g_config.scanGameDir    = 0;
+     g_config.loadOrderCount = 0;
+     strcpy(g_config.scanPath, "mods");
+@@ -212,6 +216,13 @@
+                              buf, sizeof(buf), iniPath);
+     TrimInPlace(buf);
+     g_config.logging = (buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y');
++    g_logEnabled     = g_config.logging;
++
++    /* EnableEPFallback */
++    GetPrivateProfileStringA("Chainloader", "EnableEPFallback", "1",
++                             buf, sizeof(buf), iniPath);
++    TrimInPlace(buf);
++    g_config.epFallback = (buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y');
+ 
+     /* ScanPath */
+     GetPrivateProfileStringA("Chainloader", "ScanPath", "mods",
+@@ -231,8 +242,8 @@
+                              iniPath);
+     TrimInPlace(g_config.manifest);
+ 
+-    CLog("  Enabled=%d, Logging=%d, ScanPath=%s, ScanGameDir=%d",
+-         g_config.enabled, g_config.logging,
++    CLog("  Enabled=%d, Logging=%d, EnableEPFallback=%d, ScanPath=%s, ScanGameDir=%d",
++         g_config.enabled, g_config.logging, g_config.epFallback,
+          g_config.scanPath, g_config.scanGameDir);
+     if (g_config.manifest[0])
+         CLog("  MewtatorManifest=%s", g_config.manifest);
+@@ -2732,9 +2743,14 @@
+          * called yet, and the trampoline executes after the loader lock
+          * is released.  If a proxy call fires first, the atomic guard
+          * in LoadModsOnce() makes this a no-op. */
+-        if (!PatchEntryPointFallback())
+-            CLog("WARNING: entry-point fallback failed; mods depend on "
+-                 "a version.dll proxy call.");
++        if (g_config.epFallback) {
++            if (!PatchEntryPointFallback())
++                CLog("WARNING: entry-point fallback failed; mods depend on "
++                     "a version.dll proxy call.");
++        } else {
++            CLog("Entry-point fallback disabled; mods load on the first "
++                 "version.dll proxy call.");
++        }
+         CLog("");
+     }
+     else if (reason == DLL_PROCESS_DETACH) {
+--- a/mewjector/chainloader.ini
++++ b/mewjector/chainloader.ini
+@@ -23,6 +23,13 @@
+ ; Default: 1
+ Logging=1
+ 
++; Patch the game's PE entry point so mods load even if the game never calls a
++; version.dll export. Set to 0 to skip that patch; mods then load on the first
++; proxy call. Relevant when the entry-point patch races with game startup
++; (seen on some Proton/Wine setups).
++; Default: 1
++EnableEPFallback=1
++
+ [LoadOrder]
+ 
+ ; Force specific mods to load first, in the order listed here.

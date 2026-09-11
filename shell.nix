@@ -12,6 +12,7 @@ pkgs.mkShell {
     zig
     python3
     binutils
+    patch
     git
   ];
 

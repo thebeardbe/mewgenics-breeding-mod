@@ -20,6 +20,7 @@
               pkgs.zig          # cross-compiles Windows PE with MSVC SEH (__try)
               pkgs.python3      # vendor sync + PE tooling
               pkgs.binutils     # objdump for inspecting the game exe
+              pkgs.patch        # apply patches/ to vendored sources
               pkgs.git
             ];
             shellHook = ''
