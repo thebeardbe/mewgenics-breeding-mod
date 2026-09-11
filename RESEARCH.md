@@ -394,25 +394,31 @@ fallback path.
 The remaining open item is the overlay-to-game select path (make the game show a
 chosen cat) and the MewUI button.
 
-**Selection probe and overlay sender (2026-09-11). [V]** Two additions close the
-game-to-overlay loop:
+**Selection signal found (2026-09-11). [V]** The CatMenu's current cat is set by
+one function at RVA `0xEBBA0`:
 
-- `src/spike_mod.c` now also hooks `glaiel::CatSelector::init(__int64 key)` at
-  RVA `0xDE040` (15 stolen bytes). `CatSelector` is the compo used when the
-  player opens a cat; the nametag click handler at RVA `0xEDCA0` ends up in
-  `0x14074E6C0`, which is the cat menu path.
-- `src/bridge_client.c` is a CRT-free Winsock client: Winsock is resolved with
-  `LoadLibraryA`/`GetProcAddress`, so the DLL still imports only `KERNEL32`. It
-  connects, sends one line, and closes, on a background thread so the game
-  thread never blocks.
+```
+void set_current_cat(CatMenuHouse* house, Cat* cat, bool flag)
+```
 
-Validated locally without the game: a Wine-loaded Mewjector mod started the
-client and queued key 341, and the running overlay logged
-`bridge: focusing cat key=341`. The overlay side was already verified end to end.
+The click path and the next/previous cat buttons all funnel through it. Inside
+it the game reads the cat's key at `cat + 0x80` and passes it to its own
+`CatDatabase` lookup (`0x1400D7220`), then stores the returned CatData at
+`cat + 0x8A8`. So `cat + 0x80` **is** the id the CatMenu shows.
 
-Still to confirm in-game: that clicking a cat fires `CatSelector::init` with that
-cat's key (the hook is a hypothesis), and whether it fires for non-selection cat
-UIs too (which would need filtering).
+Hook shape: Mewjector hook on `0xEBBA0`, `stolenBytes = 0` (auto-decodes 17
+bytes: `mov [rsp+0x10],rbx` plus the register pushes plus `lea rbp,[rsp-0x27]`).
+The prologue is hook-safe (small-shadow store, no caller-frame writes), unlike
+the CatMenu open function at `0x203CC5`, whose prologue saves into caller-frame
+slots and would corrupt the caller under the trampoline.
+
+Proven in-game: clicking Bert logged `selected cat key=423`; next logged 424,
+previous 423, then 420/418/420 while paging. The overlay logged
+`bridge: focusing cat key=423` 178 ms later, so the game now drives the overlay
+live, click and next/previous both.
+
+The earlier candidates were wrong and are removed: `CatSelector::init`
+(`0xDE040`) and the nametag button invoke (`0xEDCA0`) never fire on selection.
 
 Still open from the list above: the cat-select-in-game (overlay to game) path.
 
