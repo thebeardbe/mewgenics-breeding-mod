@@ -83,12 +83,17 @@ whatever was logged before the deadlock.
 
 ## Suggested directions
 
+A patch implementing (2) and (3) is provided:
+`patches/mewjector-epfallback-and-logging.patch` (applies to the repo root with
+`git apply`). It adds a `Chainloader/EnableEPFallback` ini key (default `1`; set
+`0` to skip the entry-point patch) and makes `Logging=0` actually suppress log
+output via an early flag in `LogWriteRaw`.
+
 1. Implement #4: an explicit opt-in init entry point so the entry patch is not
    needed when a mod (or Mewtator) can trigger loading.
 2. Or make the entry-point fallback opt-out via `chainloader.ini`
-   (e.g. `EnableEPFallback=0`), so users who only need proxy-export loading can
-   avoid the patch entirely.
-3. Honour `Logging=0` in `CLog`/`LogWriteRaw`.
+   (included in the patch above).
+3. Honour `Logging=0` in `CLog`/`LogWriteRaw` (included in the patch above).
 4. Optionally reduce work inside the VEH for near-null access violations at
    startup (module enumeration + a 96-slot stack walk happens on the faulting
    thread).

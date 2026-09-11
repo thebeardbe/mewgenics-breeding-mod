@@ -1,31 +1,6 @@
 --- a/version.c
 +++ b/version.c
-@@ -54,12 +54,16 @@
- static FILE*  g_logFile   = NULL;
- static HANDLE g_logMutex  = NULL;
- static HANDLE g_logHandle = INVALID_HANDLE_VALUE; /* raw HANDLE for WriteFile; avoids CRT FILE-stream lock */
-+static int    g_logEnabled = 1;                   /* mirrors Chainloader/Logging */
- 
- static void LogOpen(void)
- {
-     char logDir[MAX_PATH];
-     char logPath[MAX_PATH];
- 
-+    /* Logging=0 means no log at all: never create or truncate the file. */
-+    if (!g_logEnabled) return;
-+
-     snprintf(logDir, MAX_PATH, "%smod_logs", g_baseDir);
-     CreateDirectoryA(logDir, NULL);
- 
-@@ -97,6 +101,7 @@
- static void LogWriteRaw(const char* buf, int n)
- {
-     if (g_logHandle == INVALID_HANDLE_VALUE || n <= 0) return;
-+    if (!g_logEnabled) return;
-     BOOL held = (g_logMutex &&
-                  WaitForSingleObject(g_logMutex, 0) == WAIT_OBJECT_0);
-     DWORD written;
-@@ -149,6 +154,7 @@
+@@ -154,6 +154,7 @@
  typedef struct {
      int  enabled;            /* Master switch                            */
      int  logging;            /* Whether to log (already open by now)     */
@@ -33,27 +8,7 @@
      char scanPath[MAX_PATH]; /* Directory to scan for DLLs (relative)    */
      int  scanGameDir;        /* Also scan the exe's own directory        */
      char manifest[MAX_PATH]; /* Mewtator manifest path (abs or relative) */
-@@ -175,6 +181,19 @@
-         s[--len] = '\0';
- }
- 
-+/* Read only the Logging flag, before the log file is opened, so Logging=0
-+ * produces no log output and no file. LoadConfig re-reads everything later. */
-+static void ReadLoggingFlag(void)
-+{
-+    char iniPath[MAX_PATH];
-+    char buf[64];
-+    snprintf(iniPath, MAX_PATH, "%schainloader.ini", g_baseDir);
-+    GetPrivateProfileStringA("Chainloader", "Logging", "1",
-+                             buf, sizeof(buf), iniPath);
-+    TrimInPlace(buf);
-+    g_logEnabled = (buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y');
-+}
-+
- static void LoadConfig(void)
- {
-     char iniPath[MAX_PATH];
-@@ -183,6 +202,7 @@
+@@ -201,6 +202,7 @@
      /* Defaults — these apply if no ini exists */
      g_config.enabled        = 1;
      g_config.logging        = 1;
@@ -61,21 +16,20 @@
      g_config.scanGameDir    = 0;
      g_config.loadOrderCount = 0;
      strcpy(g_config.scanPath, "mods");
-@@ -213,6 +233,13 @@
+@@ -230,6 +232,12 @@
+                              buf, sizeof(buf), iniPath);
      TrimInPlace(buf);
      g_config.logging = (buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y');
- 
++
 +    /* EnableEPFallback */
 +    GetPrivateProfileStringA("Chainloader", "EnableEPFallback", "1",
 +                             buf, sizeof(buf), iniPath);
 +    TrimInPlace(buf);
 +    g_config.epFallback = (buf[0] == '1' || buf[0] == 'y' || buf[0] == 'Y');
-+    g_logEnabled     = g_config.logging;
-+
+     g_logEnabled     = g_config.logging;
+ 
      /* ScanPath */
-     GetPrivateProfileStringA("Chainloader", "ScanPath", "mods",
-                              g_config.scanPath, sizeof(g_config.scanPath),
-@@ -231,8 +258,8 @@
+@@ -250,8 +258,8 @@
                               iniPath);
      TrimInPlace(g_config.manifest);
  
@@ -86,15 +40,7 @@
           g_config.scanPath, g_config.scanGameDir);
      if (g_config.manifest[0])
          CLog("  MewtatorManifest=%s", g_config.manifest);
-@@ -2685,6 +2712,7 @@
-         g_vehTlsSlot = TlsAlloc();
- 
-         ResolveBaseDir();
-+        ReadLoggingFlag();
-         LogOpen();
- 
-         /* Init Mewjector API mutexes (safe under loader lock) */
-@@ -2732,9 +2760,14 @@
+@@ -2752,9 +2760,14 @@
           * called yet, and the trampoline executes after the loader lock
           * is released.  If a proxy call fires first, the atomic guard
           * in LoadModsOnce() makes this a no-op. */
