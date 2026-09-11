@@ -327,12 +327,18 @@ This builds `version.dll` (Mewjector) and mod DLLs that include `mew_ui_api.c`.
 **Loader under Wine/Proton.** Mewjector works end to end under Wine 11: the
 proxy loads, `mods/*.dll` load, and the v3 API (log, type ids, name registry)
 answers. The catch: Wine prefers its **builtin** `version.dll`, so the native
-proxy only runs with `WINEDLLOVERRIDES="version=n"`. Under Proton this must go
-in the Steam launch options:
+proxy only runs with `WINEDLLOVERRIDES="version=n,b"`. Under Proton this must
+go in the Steam launch options:
 
 ```
-WINEDLLOVERRIDES="version=n" %command%
+WINEDLLOVERRIDES="version=n,b" %command%
 ```
+
+The `,b` fallback is required, not cosmetic. With `version=n` alone Wine forces
+our native DLL on **every** prefix process; our DLL is 64-bit, so 32-bit Wine
+processes (Proton's Steam bits) fail to load it and die, which aborts the game
+launch silently. `n,b` loads native for the 64-bit game and falls back to builtin
+elsewhere.
 
 A second Wine quirk: on a fresh prefix, Wine tries to install mono/gecko and
 hangs on a dialog with no display. Adding `mscoree,mshtml=` to the overrides

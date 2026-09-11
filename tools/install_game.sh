@@ -55,8 +55,7 @@ Installed into: $GAME_DIR
 Required: force Wine to load our version.dll instead of its builtin one.
 Steam -> Mewgenics -> Properties -> Launch Options:
 
-  WINEDLLOVERRIDES="version=n" %command%
-
+  WINEDLLOVERRIDES="version=n,b" %command%
 Then launch the game and load a save, and read:
 
   $GAME_DIR/mod_logs/chainloader.log

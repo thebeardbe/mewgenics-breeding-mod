@@ -62,8 +62,10 @@ checks `mod_logs/chainloader.log`.
   it must not use the C runtime (no `stdio.h`, no `string.h`; log formatting goes
   through Mewjector's `MJ_Log`). `objdump -p` on both DLLs should show only
   `KERNEL32.dll`.
-- **`WINEDLLOVERRIDES="version=n"` is required** for the loader to be used at
-  all. Wine otherwise prefers its builtin `version.dll`.
+- **`WINEDLLOVERRIDES="version=n,b"` is required** for the loader to be used at
+  all. Wine otherwise prefers its builtin `version.dll`. The `,b` (builtin
+  fallback) is not optional: with `version=n` alone, 32-bit Wine processes try to
+  load our 64-bit DLL, fail, and die, which takes the game down with them.
 
 ## Installing in the game (Steam + Proton)
 
@@ -73,7 +75,7 @@ checks `mod_logs/chainloader.log`.
 3. Create `mods/` there and copy `dist/BreedingSpike.dll` into it.
 4. **Required on Linux/Proton:** force Wine to use our `version.dll` instead of
    its builtin. Steam -> Mewgenics -> Properties -> Launch Options:
-   `WINEDLLOVERRIDES="version=n" %command%`
+   `WINEDLLOVERRIDES="version=n,b" %command%`
 5. Launch the game and load a save. Then read:
    `~/.local/share/Steam/steamapps/common/Mewgenics/mod_logs/chainloader.log`
 

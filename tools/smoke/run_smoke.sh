@@ -40,11 +40,13 @@ echo "==> running under Wine"
 (
   cd "$RUN"
   export WINEPREFIX="$PREFIX" WINEDEBUG=-all
-  # - version=n: Wine prefers its builtin version.dll, so force ours. This is
-  #   the same override Proton needs in the Steam launch options.
+  # - version=n,b: Wine prefers its builtin version.dll, so force native ours,
+  #   falling back to builtin. The ',b' matters: 'version=n' alone makes 32-bit
+  #   Wine processes try to load our 64-bit DLL and die, which breaks Proton's
+  #   Steam bits and takes the game down with it.
   # - mscoree/mshtml disabled: without this, Wine's first run tries to install
   #   mono/gecko and hangs on a dialog there is no display for.
-  export WINEDLLOVERRIDES="version=n;mscoree,mshtml="
+  export WINEDLLOVERRIDES="version=n,b;mscoree,mshtml="
   # Wine's prefix services (wineboot/winedevice/winedbg) can outlive the app,
   # which hangs a naive `wine app.exe`. Bound it, then stop the server; the
   # log file is the real test output.
