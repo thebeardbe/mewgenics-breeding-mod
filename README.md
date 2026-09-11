@@ -15,7 +15,8 @@ game internals we have reversed, the RVAs, and the open questions.
 | Claim | Evidence |
 |---|---|
 | Mewjector loads a mod DLL and the v3 API answers | `tools/smoke/run_smoke.sh` passes under Wine 11 |
-| Our build toolchain works | `zig cc -target x86_64-windows-gnu -fms-extensions` builds `version.dll` and the mod |
+| Our build toolchain works | `zig cc -target x86_64-windows-gnu -fms-extensions` builds the mod; the shipped loader is the official Mewjector release |
+| Shipped DLLs import only `KERNEL32.dll` | checked with `objdump -p`; a UCRT-importing (`api-ms-win-crt-*`) build crashes the game at launch under Proton |
 | MewUI's RVAs match this game build | `mewgenics-ui-api`'s resolver matches every symbol against build `25143593` |
 | The overlay's `db_key` is the game's cat key | `MewSaveFile::Load` stores its `__int64` key into `CatData.sqlKey` at RVA `0x230101` |
 | Achievements are not permanently disabled | `disable_achievements` is only ever read; see `RESEARCH.md` |
@@ -51,6 +52,18 @@ nix shell nixpkgs#wine64 --command ./tools/smoke/run_smoke.sh
 
 This builds a harmless mod plus a throwaway exe, runs them under Wine, and
 checks `mod_logs/chainloader.log`.
+
+## Proton constraints (learned the hard way)
+
+- **Both DLLs must import only `KERNEL32.dll`.** A DLL that imports the UCRT API
+  sets (`api-ms-win-crt-*`) crashes the game at launch under Proton, before
+  anything is logged. The official Mewjector release already links its CRT
+  statically; our mod is built with `-nostdlib` and a plain `DllMain` entry, so
+  it must not use the C runtime (no `stdio.h`, no `string.h`; log formatting goes
+  through Mewjector's `MJ_Log`). `objdump -p` on both DLLs should show only
+  `KERNEL32.dll`.
+- **`WINEDLLOVERRIDES="version=n"` is required** for the loader to be used at
+  all. Wine otherwise prefers its builtin `version.dll`.
 
 ## Installing in the game (Steam + Proton)
 

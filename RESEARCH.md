@@ -355,6 +355,22 @@ artifacts into the Steam install and prints the launch options. `src/spike_mod.c
 is the read-only probe that hooks `MewSaveFile::Load` and logs
 `cat key=... sqlKey=... name="..."`. **[V]**
 
+**Proton crashes on UCRT imports (found the hard way). [V]** A first in-game
+test crashed at launch with no `chainloader.log` at all. Cause: the mod loader we
+built from source with zig imported `api-ms-win-crt-*` (the UCRT API sets,
+including the private one), which Proton's Wine does not resolve for a DLL loaded
+as a static import, so the process aborted before `DllMain` ran. The official
+Mewjector v3.4 release `version.dll` imports **only `KERNEL32.dll`** (it links its
+CRT statically). Fixes:
+
+- Ship the official Mewjector release as the loader (`build.sh` now does;
+  `loader --from-source` is kept for research and is not Proton-safe).
+- Build our mod DLLs with `-nostdlib -Wl,--entry,DllMain` plus zig's mingw
+  include paths and `-lkernel32`, so they are `KERNEL32`-only too. The mod source
+  must therefore stay CRT-free: no stdio, no string.h, formatting via `MJ_Log`.
+  Note this cannot extend to `mew_ui_api.c` (MewUI uses the CRT heavily), so the
+  full MewUI button mod still needs a CRT story for Proton (open question).
+
 Still open from the list above: the in-game load test on your Steam session,
 and the cat-select-in-game (overlay to game) path.
 

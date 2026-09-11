@@ -12,9 +12,14 @@ cd "$(dirname "$0")/../.."
 
 ZIG="${ZIG:-zig}"
 TARGET="-target x86_64-windows-gnu"
+CFLAGS="-O2 -fms-extensions -Wall -Wno-microsoft-anon-tag"
 UP="vendor/upstream"
 RUN=".scratch/smoke"
 PREFIX="$PWD/.scratch/wineprefix"   # kept between runs: Wine's first-run init is slow
+
+MINGW_INCLUDES="$($ZIG cc $TARGET -E -v -x c /dev/null 2>&1 \
+  | sed -n '/search starts here:/,/End of search list/p' \
+  | grep -E '^ ' | sed 's/^ *//' | sed 's/^/-I/')"
 
 ./vendor/sync.sh
 
@@ -22,10 +27,12 @@ rm -rf "$RUN"
 mkdir -p "$RUN/mods"
 
 echo "==> building loader + smoke mod"
-$ZIG cc $TARGET -O2 -fms-extensions -shared \
-  -o "$RUN/version.dll" "$UP/mewjector/version.c" "$UP/mewjector/version.def"
-cp "$UP/mewjector/chainloader.ini" "$RUN/chainloader.ini"
-$ZIG cc $TARGET -O2 -fms-extensions -shared \
+# Official loader: KERNEL32-only and known to load under Proton.
+cp "$UP/mewjector/release/version.dll" "$RUN/version.dll"
+cp "$UP/mewjector/release/chainloader.ini" "$RUN/chainloader.ini"
+# CRT-free mod, same rules as src/spike_mod.c.
+$ZIG cc $TARGET $CFLAGS -shared -nostdlib \
+  $MINGW_INCLUDES -lkernel32 -Wl,--entry,DllMain \
   -o "$RUN/mods/SmokeMod.dll" tools/smoke/hello_mod.c -I"$UP/mewjector"
 $ZIG cc $TARGET -O2 -o "$RUN/wintest.exe" tools/smoke/wintest.c -lversion
 
