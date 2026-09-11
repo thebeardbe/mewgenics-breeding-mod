@@ -18,11 +18,12 @@ game internals we have reversed, the RVAs, and the open questions.
 | Our build toolchain works | `zig cc -target x86_64-windows-gnu -fms-extensions` builds the mod; the shipped loader is the official Mewjector release |
 | Shipped DLLs import only `KERNEL32.dll` | checked with `objdump -p`; a UCRT-importing (`api-ms-win-crt-*`) build crashes the game at launch under Proton |
 | MewUI's RVAs match this game build | `mewgenics-ui-api`'s resolver matches every symbol against build `25143593` |
-| The overlay's `db_key` is the game's cat key | `MewSaveFile::Load` stores its `__int64` key into `CatData.sqlKey` at RVA `0x230101` |
+| The overlay's `db_key` is the game's cat key | `MewSaveFile::Load` stores its `__int64` key into `CatData.sqlKey` at RVA `0x230101`; confirmed in-game: 18/18 logged cats matched the overlay's save parse |
+| The mod loads in the real game under Proton | `mod_logs/chainloader.log`: loader, API, hook install, `Integrity check: ALL OK` |
 | Achievements are not permanently disabled | `disable_achievements` is only ever read; see `RESEARCH.md` |
 
-Not yet proven: that the DLL loads in the real game under Proton (needs your
-Steam launch), and the cat-select-in-game path.
+Not yet proven: the cat-select-in-game path (overlay to game), and the MewUI
+button.
 
 ## Layout
 
@@ -55,17 +56,13 @@ checks `mod_logs/chainloader.log`.
 
 ## Proton constraints (learned the hard way)
 
-- **Both DLLs must import only `KERNEL32.dll`.** A DLL that imports the UCRT API
-  sets (`api-ms-win-crt-*`) crashes the game at launch under Proton, before
-  anything is logged. The official Mewjector release already links its CRT
-  statically; our mod is built with `-nostdlib` and a plain `DllMain` entry, so
-  it must not use the C runtime (no `stdio.h`, no `string.h`; log formatting goes
-  through Mewjector's `MJ_Log`). `objdump -p` on both DLLs should show only
-  `KERNEL32.dll`.
-- **`WINEDLLOVERRIDES="version=n,b"` is required** for the loader to be used at
-  all. Wine otherwise prefers its builtin `version.dll`. The `,b` (builtin
-  fallback) is not optional: with `version=n` alone, 32-bit Wine processes try to
-  load our 64-bit DLL, fail, and die, which takes the game down with them.
+- **`WINEDLLOVERRIDES="version=n,b"` is required.** The `,b` (builtin fallback)
+  is not optional. With `version=n` alone, Wine forces our 64-bit DLL on every
+  process in the prefix, 32-bit processes cannot load it and die, and the game
+  launch aborts silently with no log.
+- We ship the official Mewjector release as the loader and build our mod DLLs
+  CRT-free (importing only `KERNEL32.dll`) as a precaution, but neither was what
+  fixed the crash. See `RESEARCH.md` for the corrected account.
 
 ## Installing in the game (Steam + Proton)
 

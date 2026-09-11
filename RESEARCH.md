@@ -361,24 +361,40 @@ artifacts into the Steam install and prints the launch options. `src/spike_mod.c
 is the read-only probe that hooks `MewSaveFile::Load` and logs
 `cat key=... sqlKey=... name="..."`. **[V]**
 
-**Proton crashes on UCRT imports (found the hard way). [V]** A first in-game
-test crashed at launch with no `chainloader.log` at all. Cause: the mod loader we
-built from source with zig imported `api-ms-win-crt-*` (the UCRT API sets,
-including the private one), which Proton's Wine does not resolve for a DLL loaded
-as a static import, so the process aborted before `DllMain` ran. The official
-Mewjector v3.4 release `version.dll` imports **only `KERNEL32.dll`** (it links its
-CRT statically). Fixes:
+**Proton launch crash: the override, not the CRT (found the hard way). [V]** The
+first in-game tests crashed silently with no `chainloader.log`. Two variables
+were in play: our loader imported `api-ms-win-crt-*`, and the launch option was
+`version=n`. Both were changed, and the crash was blamed on the CRT. That was
+wrong: the **official KERNEL32-only loader also crashed under `version=n`**, and
+it worked the moment the option became `version=n,b`. The real cause was the
+missing builtin fallback: `version=n` forces our 64-bit `version.dll` on every
+process in the prefix, and 32-bit Wine processes cannot load a 64-bit DLL, so
+Proton's Steam plumbing died and took the launch with it. Consequences:
 
-- Ship the official Mewjector release as the loader (`build.sh` now does;
-  `loader --from-source` is kept for research and is not Proton-safe).
-- Build our mod DLLs with `-nostdlib -Wl,--entry,DllMain` plus zig's mingw
-  include paths and `-lkernel32`, so they are `KERNEL32`-only too. The mod source
-  must therefore stay CRT-free: no stdio, no string.h, formatting via `MJ_Log`.
-  Note this cannot extend to `mew_ui_api.c` (MewUI uses the CRT heavily), so the
-  full MewUI button mod still needs a CRT story for Proton (open question).
+- The required setting is `WINEDLLOVERRIDES="version=n,b"`.
+- We still ship the official Mewjector release as the loader (mature, KERNEL32
+  only), and still build mods CRT-free out of caution, but neither was the fix.
+  Whether a runtime-loaded mod may freely import `api-ms-win-crt-*` under Proton
+  is still untested, and matters for MewUI (see the open question below).
 
-Still open from the list above: the in-game load test on your Steam session,
-and the cat-select-in-game (overlay to game) path.
+**In-game proof (Steam/Proton, 2026-09-11). [V]** With
+`WINEDLLOVERRIDES="version=n,b"`, the game launched, Mewjector loaded
+`BreedingSpike.dll`, the hook installed at RVA `0x230060`, and
+`Integrity check: ALL OK`. Loading a save logged 18 cats, and all 18 had
+`key == sqlKey` with names matching the overlay's own parse of
+`steamcampaign02.sav` exactly (keys present and names identical for 18/18). The
+overlay's `db_key` is therefore confirmed to be the game's cat key at runtime,
+and the in-game side of the bridge works.
+
+Incidental log notes, both harmless: `Could not resolve GetFileVersionInfoByHandle`
+(Wine's `version.dll` does not export it) and a non-fatal
+`[VEH] code=0xC0000094` (divide by zero, `fatal=0`, handled) from the entry-point
+fallback path.
+
+The remaining open item is the overlay-to-game select path (make the game show a
+chosen cat) and the MewUI button.
+
+Still open from the list above: the cat-select-in-game (overlay to game) path.
 
 ## 10. References
 
