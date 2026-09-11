@@ -15,6 +15,7 @@ vars (never argv, never on disk), and is never printed.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -78,7 +79,9 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GIT_CONFIG_COUNT"] = "1"
     env["GIT_CONFIG_KEY_0"] = "http.extraHeader"
-    env["GIT_CONFIG_VALUE_0"] = "Authorization: Bearer " + TOKEN
+    # GitHub's git smart-HTTP endpoint wants Basic (x-access-token), not Bearer.
+    basic = base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode()
+    env["GIT_CONFIG_VALUE_0"] = "Authorization: Basic " + basic
     cwd = str(CLONE_DIR) if CLONE_DIR.is_dir() else None
     result = subprocess.run(["git", *args], cwd=cwd, env=env,
                             capture_output=True, text=True)
