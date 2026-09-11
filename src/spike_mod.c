@@ -102,21 +102,51 @@ static void WideToUtf8(const wchar_t* src, uint64_t count, char* out, int out_si
     out[written] = '\0';
 }
 
+/* Safe reads: this DLL is built without the C runtime, so SEH (__try/__except)
+ * is not reliable here. Validate every game pointer with VirtualQuery before
+ * dereferencing it. */
+static int IsReadableRange(const void* address, size_t size) {
+    const unsigned char* cursor = (const unsigned char*)address;
+    const unsigned char* end;
+
+    if (!address || size == 0) return 0;
+    end = cursor + size;
+    if (end < cursor) return 0;   /* wrap */
+
+    while (cursor < end) {
+        MEMORY_BASIC_INFORMATION info;
+        const unsigned char* region_end;
+        if (VirtualQuery(cursor, &info, sizeof info) == 0) return 0;
+        if (info.State != MEM_COMMIT) return 0;
+        if (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return 0;
+        region_end = (const unsigned char*)info.BaseAddress + info.RegionSize;
+        if (region_end <= cursor) return 0;
+        cursor = region_end;
+    }
+    return 1;
+}
+
 static void NameFromCatData(const unsigned char* cat_data, char* out, int out_size) {
     const unsigned char* name_field;
     const wchar_t* text;
     uint64_t length;
     uint64_t capacity;
+    uint64_t chars;
 
     if (out_size <= 0) return;
     out[0] = '\0';
     if (!cat_data) return;
 
     name_field = cat_data + CATDATA_NAME_OFFSET;
+    if (!IsReadableRange(name_field, 32)) return;
+
     length = *(const uint64_t*)(name_field + 16);
     capacity = *(const uint64_t*)(name_field + 24);
     text = (capacity > 7) ? *(const wchar_t* const*)name_field
                           : (const wchar_t*)name_field;
+
+    chars = length > NAME_MAX_CHARS ? NAME_MAX_CHARS : length;
+    if (!text || !IsReadableRange(text, (size_t)(chars + 1) * sizeof(wchar_t))) return;
     WideToUtf8(text, length, out, out_size);
 }
 
@@ -134,43 +164,50 @@ static void __cdecl HookLoadCatData(void* self, int64_t key, void* cat_data) {
         g_orig_load_catdata(self, key, cat_data);
     }
     if (InterlockedIncrement(&g_cat_count) > CAT_LOG_LIMIT) return;
-    if (!cat_data) return;
-    __try {
-        LogCat(key, (const unsigned char*)cat_data);
+    if (!cat_data || !IsReadableRange(cat_data, CATDATA_SQLKEY_OFFSET + 8)) {
+        SAY("cat key=%lld: cat data not readable", (long long)key);
+        return;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        SAY("cat key=%lld: guarded read faulted", (long long)key);
-    }
+    LogCat(key, (const unsigned char*)cat_data);
 }
 
 /* ── hook 2: current cat (CatMenu selection) ─────────────────────────────── */
 
 static void __cdecl HookSetCurrentCat(void* house, void* cat, unsigned char flag) {
-    if (house) g_house = house;
-    if (cat) {
-        __try {
-            const unsigned char* obj = (const unsigned char*)cat;
-            int64_t key = *(const int64_t*)(obj + HOUSE_CAT_KEY_OFFSET);
-            const unsigned char* cat_data =
-                *(const unsigned char* const*)(obj + HOUSE_CAT_CATDATA_OFFSET);
-            int64_t sql_key = cat_data
-                ? *(const int64_t*)(cat_data + CATDATA_SQLKEY_OFFSET) : -1;
-            char name[NAME_BUFFER];
-            NameFromCatData(cat_data, name, (int)sizeof name);
+    int64_t key = 0;
 
+    if (house) g_house = house;
+
+    /* The key is valid before the call; the CatData at +0x8A8 is only filled in
+     * by the original, so read that afterwards (it can be garbage before). */
+    if (cat && IsReadableRange((const unsigned char*)cat + HOUSE_CAT_KEY_OFFSET, 8)) {
+        key = *(const int64_t*)((const unsigned char*)cat + HOUSE_CAT_KEY_OFFSET);
+    }
+
+    if (g_orig_set_current_cat) {
+        g_orig_set_current_cat(house, cat, flag);
+    }
+
+    if (cat) {
+        const unsigned char* obj = (const unsigned char*)cat;
+        const unsigned char* cat_data = NULL;
+        char name[NAME_BUFFER];
+        name[0] = '\0';
+
+        if (IsReadableRange(obj + HOUSE_CAT_CATDATA_OFFSET, 8)) {
+            cat_data = *(const unsigned char* const*)(obj + HOUSE_CAT_CATDATA_OFFSET);
+        }
+        if (cat_data && IsReadableRange(cat_data, CATDATA_SQLKEY_OFFSET + 8)) {
+            int64_t sql_key = *(const int64_t*)(cat_data + CATDATA_SQLKEY_OFFSET);
+            NameFromCatData(cat_data, name, (int)sizeof name);
             SAY("selected cat key=%lld catData=%llX sqlKey=%lld name=\"%s\"",
                 (long long)key, (unsigned long long)(uintptr_t)cat_data,
                 (long long)sql_key, name);
-
             if (key <= 0 && sql_key > 0) key = sql_key;
-            if (key > 0) bridge_client_send_key(key);
+        } else {
+            SAY("selected cat key=%lld (no cat data yet)", (long long)key);
         }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            SAY("selected cat: guarded read fault");
-        }
-    }
-    if (g_orig_set_current_cat) {
-        g_orig_set_current_cat(house, cat, flag);
+        if (key > 0) bridge_client_send_key(key);
     }
 }
 
@@ -184,61 +221,73 @@ static void __cdecl HookCatUiSetup(void* house) {
     }
 }
 
-/* Find the house cat with *key* and make it the CatMenu's current cat. */
+/* Find the house cat with *key* and make it the CatMenu's current cat. Every
+ * game pointer is validated first (no SEH in this build). */
 static int SelectCatByKey(int64_t key) {
     void* house = g_house;
-    int found = 0;
+    unsigned char* holder;
+    unsigned char* manager;
+    unsigned char* comp_array;
+    unsigned char* component;
+    unsigned char** data;
+    uint32_t count;
+    uint32_t i;
 
     if (!house) {
         SAY("select key=%lld: house not cached yet (no house cat UI?)", (long long)key);
         return 0;
     }
-
-    __try {
-        unsigned char* holder = *(unsigned char**)((unsigned char*)house + HOUSE_SCENE_HOLDER_OFFSET);
-        unsigned char* manager = holder
-            ? *(unsigned char**)(holder + HOUSE_SCENE_MANAGER_OFFSET) : NULL;
-        unsigned char* comp_array = manager
-            ? *(unsigned char**)(manager + SCENE_COMPONENT_ARRAY_OFFSET) : NULL;
-        unsigned char* component = comp_array
-            ? *(unsigned char**)(comp_array + HOUSE_CATS_COMPONENT_TYPE * COMPONENT_STRIDE)
-            : NULL;
-        unsigned char** data;
-        uint32_t count;
-        uint32_t i;
-
-        if (!component) {
-            SAY("select key=%lld: house cat list not found", (long long)key);
-            return 0;
-        }
-
-        data = *(unsigned char***)(component + COMPONENT_DATA_OFFSET);
-        count = *(uint32_t*)(component + COMPONENT_COUNT_OFFSET);
-        SAY("select key=%lld: house cat list has %u entries", (long long)key, count);
-
-        for (i = 0; i < count && data; i++) {
-            unsigned char* cat = data[i];
-            int64_t cat_key;
-            if (!cat) continue;
-            cat_key = *(int64_t*)(cat + HOUSE_CAT_KEY_OFFSET);
-            if (cat_key == key) {
-                SAY("select key=%lld: found at index %u, applying", (long long)key, i);
-                if (g_orig_set_current_cat) {
-                    g_orig_set_current_cat(house, cat, 1);
-                    found = 1;
-                }
-                break;
-            }
-        }
-        if (!found) {
-            SAY("select key=%lld: key not present in the house cat list", (long long)key);
-        }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        SAY("select key=%lld: guarded read fault", (long long)key);
+    if (!IsReadableRange((unsigned char*)house + HOUSE_SCENE_HOLDER_OFFSET, 8)) {
+        SAY("select key=%lld: house not readable", (long long)key);
         return 0;
     }
-    return found;
+    holder = *(unsigned char**)((unsigned char*)house + HOUSE_SCENE_HOLDER_OFFSET);
+    if (!holder || !IsReadableRange(holder + HOUSE_SCENE_MANAGER_OFFSET, 8)) {
+        SAY("select key=%lld: scene holder not readable", (long long)key);
+        return 0;
+    }
+    manager = *(unsigned char**)(holder + HOUSE_SCENE_MANAGER_OFFSET);
+    if (!manager || !IsReadableRange(manager + SCENE_COMPONENT_ARRAY_OFFSET, 8)) {
+        SAY("select key=%lld: scene manager not readable", (long long)key);
+        return 0;
+    }
+    comp_array = *(unsigned char**)(manager + SCENE_COMPONENT_ARRAY_OFFSET);
+    if (!comp_array || !IsReadableRange(
+            comp_array + HOUSE_CATS_COMPONENT_TYPE * COMPONENT_STRIDE, 8)) {
+        SAY("select key=%lld: component array not readable", (long long)key);
+        return 0;
+    }
+    component = *(unsigned char**)(comp_array + HOUSE_CATS_COMPONENT_TYPE * COMPONENT_STRIDE);
+    if (!component
+            || !IsReadableRange(component + COMPONENT_DATA_OFFSET, 8)
+            || !IsReadableRange(component + COMPONENT_COUNT_OFFSET, 4)) {
+        SAY("select key=%lld: house cat list not found", (long long)key);
+        return 0;
+    }
+
+    data = *(unsigned char***)(component + COMPONENT_DATA_OFFSET);
+    count = *(uint32_t*)(component + COMPONENT_COUNT_OFFSET);
+    if (count > 4096) count = 4096;   /* sanity on a hostile/garbage count */
+    SAY("select key=%lld: house cat list has %u entries", (long long)key, count);
+
+    for (i = 0; i < count; i++) {
+        unsigned char* cat;
+        int64_t cat_key;
+        if (!data || !IsReadableRange(data + i, 8)) break;
+        cat = data[i];
+        if (!cat || !IsReadableRange(cat + HOUSE_CAT_KEY_OFFSET, 8)) continue;
+        cat_key = *(int64_t*)(cat + HOUSE_CAT_KEY_OFFSET);
+        if (cat_key == key) {
+            SAY("select key=%lld: found at index %u, applying", (long long)key, i);
+            if (g_orig_set_current_cat) {
+                g_orig_set_current_cat(house, cat, 1);
+                return 1;
+            }
+            break;
+        }
+    }
+    SAY("select key=%lld: key not present in the house cat list", (long long)key);
+    return 0;
 }
 
 static void OnSelectCommand(int64_t key) {
