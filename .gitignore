@@ -1,0 +1,13 @@
+# Build outputs and vendored upstream sources (fetched by vendor/sync.sh)
+dist/
+vendor/upstream/
+mod_logs/
+*.pdb
+*.lib
+*.obj
+.scratch/
+
+# Python / editor noise
+__pycache__/
+*.pyc
+.DS_Store
