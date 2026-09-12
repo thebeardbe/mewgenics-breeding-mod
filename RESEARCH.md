@@ -454,6 +454,30 @@ reliable here (an access violation escaped it and crashed the game). Validate
 game pointers with `VirtualQuery` before dereferencing, and read fields the
 original fills only after calling it.
 
+### Relaunching the game for a test (runbook)
+
+The Steam launch options on this machine already load the mod under Proton:
+`PROTON_LOG=1 WINEDLLOVERRIDES="version=n,b" %command%`. When the game has
+exited, start it again with:
+
+```bash
+steam steam://rungameid/686060
+```
+
+Mods load on the first `version.dll` proxy call, not at process start, so the
+chainloader log can stay empty for a while after the window appears:
+
+```bash
+tail -f ~/.local/share/Steam/steamapps/common/Mewgenics/mod_logs/chainloader.log
+tail -f ~/.config/mewgenics-overlay/overlay.log
+```
+
+Mouse input and keyboard input cannot be injected on this session (`wtype`
+delivers nothing here, verified against a plain terminal), so a cat click in the
+game has to be done by hand. The mod's own log lines and the overlay's
+`overlay.log` are the evidence for a manual pass; see the overlay repo's
+AGENTS.md for the stand-in TCP client used to drive the bridge without a click.
+
 ## 10. References
 
 Repos (all MIT unless noted):
