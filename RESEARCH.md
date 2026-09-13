@@ -478,6 +478,12 @@ game has to be done by hand. The mod's own log lines and the overlay's
 `overlay.log` are the evidence for a manual pass; see the overlay repo's
 AGENTS.md for the stand-in TCP client used to drive the bridge without a click.
 
+**Live shape of the game process (verified 2026-09-13).** The process is
+`Mewgenics.exe` (its `comm`, so the overlay matches it by exact name), and it
+holds the loaded campaign's `.sav` open for the whole session. During a campaign
+switch two saves can be briefly open at the same time, and the overlay then picks
+whichever the directory scan yields first and corrects itself on the next tick.
+
 ## 10. References
 
 Repos (all MIT unless noted):
