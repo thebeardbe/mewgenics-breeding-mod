@@ -37,6 +37,11 @@
 
 #define RVA_SET_CURRENT_CAT 0xEBBA0u
 #define RVA_CAT_UI_SETUP 0xE9AC0u
+/* The game's own CatMenu click path: rcx = house, rdx = cat. It calls
+ * set_current_cat(house, cat, 1) itself and then opens and populates the
+ * detail pane. 0x203C80 / 0x203CC5 are internal branches, not callable
+ * entries, so they are not used here. */
+#define RVA_OPEN_CAT_DETAIL 0xEC7B0u
 
 /* House cat list: the scene's component array is at manager+0x20, one entry per
  * type (0x10 bytes each). Type 0x448 is the House cat list: count at +0xc,
@@ -76,6 +81,11 @@ static fn_set_current_cat g_orig_set_current_cat = NULL;
 
 typedef void (__cdecl *fn_cat_ui_setup)(void* house);
 static fn_cat_ui_setup g_orig_cat_ui_setup = NULL;
+
+/* The game's own CatMenu click path (house, cat); see RVA_OPEN_CAT_DETAIL.
+ * It sets the current cat and opens the detail pane in one call. */
+typedef void (__cdecl *fn_open_cat_detail)(void* house, void* cat);
+static fn_open_cat_detail g_open_cat_detail = NULL;
 
 /* The CatMenu controller, cached when the game sets up the cat UI. */
 static void* volatile g_house = NULL;
@@ -221,8 +231,9 @@ static void __cdecl HookCatUiSetup(void* house) {
     }
 }
 
-/* Find the house cat with *key* and make it the CatMenu's current cat. Every
- * game pointer is validated first (no SEH in this build). */
+/* Find the house cat with *key* and make it the CatMenu's current cat, then
+ * open that cat's detail pane by calling the game's own click path. Every game
+ * pointer is validated first (no SEH in this build). */
 static int SelectCatByKey(int64_t key) {
     void* house = g_house;
     unsigned char* holder;
@@ -279,6 +290,16 @@ static int SelectCatByKey(int64_t key) {
         cat_key = *(int64_t*)(cat + HOUSE_CAT_KEY_OFFSET);
         if (cat_key == key) {
             SAY("select key=%lld: found at index %u, applying", (long long)key, i);
+            if (g_open_cat_detail
+                    && IsReadableRange((const void*)g_open_cat_detail, 1)) {
+                SAY("select key=%lld: calling game click path fn=%p house=%p cat=%p",
+                    (long long)key, (void*)g_open_cat_detail, house, (void*)cat);
+                g_open_cat_detail(house, cat);
+                SAY("select key=%lld: game click path returned", (long long)key);
+                return 1;
+            }
+            SAY("select key=%lld: game click path unavailable, falling back to set_current_cat",
+                (long long)key);
             if (g_orig_set_current_cat) {
                 g_orig_set_current_cat(house, cat, 1);
                 return 1;
@@ -326,6 +347,16 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         SAY("BreedingSpike loaded: mj version=%d gameBase=0x%llX",
             g_mj.GetVersion ? g_mj.GetVersion() : -1,
             (unsigned long long)(g_mj.GetGameBase ? g_mj.GetGameBase() : 0));
+
+        if (g_mj.GetGameBase) {
+            UINT_PTR base = g_mj.GetGameBase();
+            g_open_cat_detail = (fn_open_cat_detail)(base + RVA_OPEN_CAT_DETAIL);
+            SAY("open cat detail resolved: base=0x%llX rva=0x%X fn=%p",
+                (unsigned long long)base, (unsigned)RVA_OPEN_CAT_DETAIL,
+                (void*)g_open_cat_detail);
+        } else {
+            SAY("open cat detail: GetGameBase unavailable, falling back to set_current_cat");
+        }
 
         InstallProbe("save-load", RVA_MEWSAVEFILE_LOAD_CATDATA,
                      MEWSAVEFILE_LOAD_STOLEN_BYTES, (void*)HookLoadCatData,

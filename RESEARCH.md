@@ -420,6 +420,13 @@ register saves at `0x203CC5` write into that function's own frame.
 mod must find the enclosing function's real entry and calling convention first,
 not call this address.
 
+**Cat detail pane entry (2026-09-13) [V]:** the enclosing routine is a normal
+function at RVA `0x203C80` (`push rbp; push r12; mov rbp,rsp; sub rsp,0x58`). Its
+argument arrives in `rcx`: the same house/CatMenu object cached from the
+`0xE9AC0` hook. It reads a byte flag at `[rcx+0x50]`; at 0 it runs the open
+path, at 1 it closes the pane. The spike resolves it from the game base and
+calls it after a successful overlay-driven select when the flag reads 0.
+
 Proven in-game: clicking Bert logged `selected cat key=423`; next logged 424,
 previous 423, then 420/418/420 while paging. The overlay logged
 `bridge: focusing cat key=423` 178 ms later, so the game now drives the overlay
@@ -428,7 +435,26 @@ live, click and next/previous both.
 The earlier candidates were wrong and are removed: `CatSelector::init`
 (`0xDE040`) and the nametag button invoke (`0xEDCA0`) never fire on selection.
 
-Still open from the list above: the cat-select-in-game (overlay to game) path.
+**Cat detail pane, how it was solved (2026-09-13). [V]** Selecting a cat from
+the overlay changed the selection but did not open the detail pane unless it was
+already open. Two findings fixed that:
+
+- `0x203CC5` is not a callable entry. The exception table does list it as its own
+  function, but it is the open branch of the routine that starts at `0x203C80`
+  and it uses `rbp`/`r12` set up by that entry, so calling it directly is wrong.
+- `set_current_cat` (`0xEBBA0`) does call the pane routine, but only past a
+  predicate branch at `0x1400EBB4F`, and the pane routine takes an object the game
+  derives as `*(*(house+0x38)+0x18)`, not the house the mod caches. That is why
+  the mod's first attempt, reading a flag at `house+0x50`, saw 160 and never
+  fired.
+
+The game's own select-and-open path is the routine at `0xEC7B0` (`rcx` = house,
+`rdx` = cat): it calls `set_current_cat(house, cat, 1)` and then opens and
+populates the pane. The mod calls that routine for overlay-driven selects, with a
+logged fallback to `set_current_cat` when it cannot be resolved. Proven in game:
+the pane opens with the requested cat, no crash. The helper used to find the real
+entry, the PE exception table (`RUNTIME_FUNCTION`), is worth reusing for any
+future "which function contains this address" question.
 
 **Reverse direction (overlay -> game). [V]** Selecting a cat in game is one call:
 `set_current_cat(house, cat, 1)`. To find `cat` from a key:
