@@ -18,6 +18,8 @@
 #     kernel32 only. Our own sources avoid the C runtime (formatting goes
 #     through Mewjector's MJ_Log). Vendored MewUI does use it, so
 #     src/crt_shim.c supplies the few functions it calls over KERNEL32 only.
+#     MewUI, its shim, and compiler-rt are linked only in MewUI modes (1, 2);
+#     mode 0 is the lean, pre-MewUI DLL again.
 #
 # MewUI uses MSVC __try/__except, which GCC/mingw cannot compile, so zig stays.
 set -euo pipefail
@@ -73,29 +75,41 @@ build_loader() {
 
 build_mod() {
   echo "==> BreedingSpike.dll (CRT-free, KERNEL32-only, MewUI mode $MEWUI_MODE)"
-  # The shim replaces the handful of CRT functions MewUI needs. It is compiled
-  # separately with -ffreestanding -fno-builtin so the compiler cannot lower a
-  # hand-written mem*/str* loop into a call to itself. src/crt_format.c is the
-  # formatting half, split out to stay inside the file-size budget.
-  local shim_dir="$OUT/.obj"
-  mkdir -p "$shim_dir"
-  $ZIG cc $TARGET $CFLAGS -ffreestanding -fno-builtin -c \
-    $MINGW_INCLUDES -Isrc \
-    -o "$shim_dir/crt_shim.o" src/crt_shim.c
-  $ZIG cc $TARGET $CFLAGS -ffreestanding -fno-builtin -c \
-    $MINGW_INCLUDES -Isrc \
-    -o "$shim_dir/crt_format.o" src/crt_format.c
-  # MewUI's typed-text function has a frame over 4 KB, so the compiler emits a
-  # ___chkstk_ms stack probe. -nostdlib also drops zig's compiler-rt, so pull
-  # it back in explicitly; it is static and adds no DLL imports.
+  # Every mode links our own sources, KERNEL32, and the Mewjector header. Mode 0
+  # is the pre-MewUI DLL: no mew_ui_api.o, no shim, no compiler-rt.
+  local sources=(src/spike_mod.c src/bridge_client.c src/shortcut_watcher.c)
+  local objects=()
+  local include_dirs=(-I"$UP/mewjector" -Isrc)
+  local libs=(-lkernel32)
+
+  if [ "$MEWUI_MODE" != 0 ]; then
+    # The shim replaces the handful of CRT functions MewUI needs. It is
+    # compiled separately with -ffreestanding -fno-builtin so the compiler
+    # cannot lower a hand-written mem*/str* loop into a call to itself.
+    # src/crt_format.c is the formatting half, split out to stay inside the
+    # file-size budget.
+    local shim_dir="$OUT/.obj"
+    mkdir -p "$shim_dir"
+    $ZIG cc $TARGET $CFLAGS -ffreestanding -fno-builtin -c \
+      $MINGW_INCLUDES -Isrc \
+      -o "$shim_dir/crt_shim.o" src/crt_shim.c
+    $ZIG cc $TARGET $CFLAGS -ffreestanding -fno-builtin -c \
+      $MINGW_INCLUDES -Isrc \
+      -o "$shim_dir/crt_format.o" src/crt_format.c
+    # MewUI's typed-text function has a frame over 4 KB, so the compiler emits
+    # a ___chkstk_ms stack probe. -nostdlib also drops zig's compiler-rt, so
+    # pull it back in explicitly; it is static and adds no DLL imports.
+    objects=("$shim_dir/crt_shim.o" "$shim_dir/crt_format.o")
+    sources+=("$UP/mewui/src/native/mew_ui_api.c")
+    include_dirs+=(-I"$UP/mewui" -I"$UP/mewui/src/native")
+    libs+=(-lcompiler_rt)
+  fi
+
   $ZIG cc $TARGET $CFLAGS -DMEWUI_MODE="$MEWUI_MODE" -shared -nostdlib \
-    $MINGW_INCLUDES -lkernel32 -lcompiler_rt \
+    $MINGW_INCLUDES "${libs[@]}" \
     -Wl,--entry,DllMain \
     -o "$OUT/BreedingSpike.dll" \
-    "$shim_dir/crt_shim.o" "$shim_dir/crt_format.o" \
-    src/spike_mod.c src/bridge_client.c \
-    "$UP/mewui/src/native/mew_ui_api.c" \
-    -I"$UP/mewjector" -I"$UP/mewui" -I"$UP/mewui/src/native" -Isrc
+    "${objects[@]}" "${sources[@]}" "${include_dirs[@]}"
 }
 
 what="${1:-all}"

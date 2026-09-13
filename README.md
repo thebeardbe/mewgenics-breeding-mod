@@ -35,6 +35,7 @@ build.sh              build dist/version.dll + dist/BreedingSpike.dll
 flake.nix, shell.nix  dev shell (zig, python3, binutils, git)
 src/spike_mod.c       probe: MewSaveFile::Load (roster) + CatSelector::init (selection)
 src/bridge_client.c   CRT-free Winsock sender: focus requests to the overlay
+src/shortcut_watcher.c always-on Ctrl+Shift+B watcher: raise the overlay in any mode
 src/crt_shim.c        KERNEL32-only mem/str/heap replacements for MewUI's CRT calls
 src/crt_format.c      the snprintf/vsnprintf/_snwprintf half of that shim
 tools/smoke/          Wine tests for the loader pipeline and the sender

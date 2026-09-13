@@ -18,8 +18,13 @@
  *
  * On a selection the key is logged and sent to the overlay over loopback TCP.
  *
- * IMPORTANT: no C runtime. The DLL imports only KERNEL32; Winsock is resolved
- * with LoadLibraryA. Keep it that way.
+ * Two extra ways to raise the overlay for the current cat, both of which send
+ * the same "raise" message: an always-on Ctrl+Shift+B watcher that works with
+ * MewUI entirely off (src/shortcut_watcher.c), and, in MewUI mode 2 only, a
+ * non-exclusive hook of an existing vanilla CatMenu button.
+ *
+ * IMPORTANT: no C runtime. The DLL imports only KERNEL32; Winsock and user32's
+ * GetAsyncKeyState are resolved with LoadLibraryA. Keep it that way.
  */
 
 #include <windows.h>
@@ -28,6 +33,7 @@
 
 #include "mewjector.h"
 #include "bridge_client.h"
+#include "shortcut_watcher.h"
 
 #define MOD_NAME "BreedingSpike"
 
@@ -37,9 +43,9 @@
  *               save-load roster, current-cat bridge, and overlay select/pane.
  *   1           start MewUI and log readiness, but create no button and do no
  *               scene lookup. Isolates whether MewUI by itself faults.
- *   2           start MewUI and create the raise button from a vanilla House
- *               node, trying a bounded number of times. The attempt count is
- *               capped so a missing node can never flood the log or the frame
+ *   2           start MewUI and hook an existing vanilla House button
+ *               non-exclusively. The attempt count is bounded by the candidate
+ *               list so a missing node can never flood the log or the frame
  *               budget the way the first mode 2 build did (~94k handled faults).
  * Override the default with -DMEWUI_MODE=N. */
 #ifndef MEWUI_MODE
@@ -54,7 +60,7 @@
 #elif MEWUI_MODE == 1
 #define MEWUI_MODE_NAME "bootstrap only; started, no button, no scene lookup"
 #else
-#define MEWUI_MODE_NAME "full; started, raise button enabled"
+#define MEWUI_MODE_NAME "full; started, existing-button hook enabled"
 #endif
 
 #if MEWUI_MODE >= 1
@@ -120,11 +126,10 @@ static fn_open_cat_detail g_open_cat_detail = NULL;
 /* The CatMenu controller, cached when the game sets up the cat UI. */
 static void* volatile g_house = NULL;
 
-#if MEWUI_MODE == 2
-/* The cat key the CatMenu last made current; read by the raise button callback
- * so a click can ask the overlay to come forward on that cat. */
+/* The cat key the CatMenu last made current. Read by the raise hook callback
+ * and by the Ctrl+Shift+B watcher so either one can ask the overlay to come
+ * forward on that cat. Cached in every MewUI mode, including mode 0. */
 static volatile LONG64 g_current_cat_key = 0;
-#endif
 
 /* Prologue byte count for 0xE9AC0: push rbp (2, REX-prefixed) + push rbx/rsi/rdi
  * (3) + push r12/r13/r14/r15 (8) = 13, then lea rbp,[rsp-0x398] (8) = 21. A
@@ -254,9 +259,7 @@ static void __cdecl HookSetCurrentCat(void* house, void* cat, unsigned char flag
             SAY("selected cat key=%lld (no cat data yet)", (long long)key);
         }
         if (key > 0) {
-#if MEWUI_MODE == 2
             InterlockedExchange64(&g_current_cat_key, key);
-#endif
             bridge_client_send_key(key);
         }
     }
@@ -357,6 +360,21 @@ static void OnSelectCommand(int64_t key) {
     SelectCatByKey(key);
 }
 
+/* ── in-game shortcut (all modes, including mode 0) ─────────────────────── */
+
+/* Atomic read: the watcher thread reads the key the game thread cached in
+ * HookSetCurrentCat. */
+static int64_t CurrentCatKey(void) {
+    return (int64_t)InterlockedCompareExchange64(&g_current_cat_key, 0, 0);
+}
+
+/* Called from the watcher thread on a fresh Ctrl+Shift+B press. The watcher has
+ * already logged and skipped the no-key case, so only a real key arrives. */
+static void OnShortcutRaise(int64_t key) {
+    SAY("shortcut raise: key=%lld", (long long)key);
+    bridge_client_send_raise(key);
+}
+
 /* ── init ────────────────────────────────────────────────────────────────── */
 
 static void BridgeLog(const char* message) {
@@ -378,25 +396,26 @@ static void BridgeLog(const char* message) {
 static volatile LONG g_ui_tick_count = 0;
 
 #if MEWUI_MODE == 2
-/* ── "bring the overlay forward" button (mode 2) ────────────────────────── */
+/* ── existing-button hook (mode 2) ──────────────────────────────────────── */
 
-/* The button is built from an existing House SWF instance node, and its label
- * is literal text, so it needs no localization key. RAISE_BUTTON_NODE must name
- * a node that exists in the vanilla House UI: "nametag_button" is the per-cat
- * nametag button in resources.gpak -> swfs/house.swf (RESEARCH.md section 4).
- * MewUI's example SWF node "test_button" is not in the game and only produced
- * handled faults. Changing this one define is enough to try another node. */
+/* MewUI cannot create new UI from the DLL alone (its own README: a mod must
+ * ship an SWF for that), so instead we hook an existing vanilla button
+ * non-exclusively: the game's own click still runs, and the click event also
+ * queues the raise. The candidates are CatMenu nodes in the House scene
+ * (RESEARCH.md section 4). One name is tried per attempt, so at most
+ * RAISE_BUTTON_MAX_ATTEMPTS scene lookups happen in total, never per frame. */
 #define RAISE_BUTTON_SCENE "House"
-#define RAISE_BUTTON_NODE "nametag_button"
-#define RAISE_BUTTON_ROLE "BreedingSpike_RaiseOverlay"
-#define RAISE_BUTTON_LABEL "MBO"
+#define RAISE_BUTTON_NODE_CANDIDATES { "Stats", "HouseCatStatus", "tobox" }
 
-/* The node may not be up on the first scene-ready tick, so try a few times and
- * then give up. Between attempts the tick costs two flag tests; the scene
- * lookup happens only inside an attempt, at most RAISE_BUTTON_MAX_ATTEMPTS
- * times, and no attempt loop can run indefinitely. */
-#define RAISE_BUTTON_MAX_ATTEMPTS 3
+/* The node may not be up on the first scene-ready tick, so try the candidates a
+ * few times and then give up. Between attempts the tick costs two flag tests;
+ * the scene lookup happens only inside an attempt. */
 #define RAISE_BUTTON_ATTEMPT_INTERVAL_TICKS 60
+
+static const char* const kRaiseButtonNodeCandidates[] = RAISE_BUTTON_NODE_CANDIDATES;
+/* One attempt per candidate: three for the three names above. */
+#define RAISE_BUTTON_MAX_ATTEMPTS \
+    ((int)(sizeof kRaiseButtonNodeCandidates / sizeof kRaiseButtonNodeCandidates[0]))
 
 static void* g_raise_button = NULL;
 static int g_raise_button_ready = 0;
@@ -424,76 +443,47 @@ static void __cdecl OnRaiseButtonEvent(void* button, MewButtonEvent event_type,
     bridge_client_send_raise(key);
 }
 
-/* One bounded attempt: exactly one scene lookup, then one setup call. Runs at
- * most RAISE_BUTTON_MAX_ATTEMPTS times, one attempt every
+/* One bounded attempt: try exactly one candidate name with one non-exclusive
+ * hook call. Runs at most RAISE_BUTTON_MAX_ATTEMPTS times, one attempt every
  * RAISE_BUTTON_ATTEMPT_INTERVAL_TICKS scene-ready ticks, then stops for good. */
 static void AttemptRaiseButton(LONG tick) {
-    MewButtonCreateInfo info;
-    void* scene;
-    void* button = NULL;
-    int created = 0;
+    const char* node = kRaiseButtonNodeCandidates[g_raise_button_attempts];
+    void* button;
 
     g_raise_button_attempts++;
-    SAY("raise button: attempt %d/%d scene='%s' node='%s' role='%s'",
+    SAY("raise button hook: attempt %d/%d scene='%s' node='%s'",
         g_raise_button_attempts, RAISE_BUTTON_MAX_ATTEMPTS,
-        RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE, RAISE_BUTTON_ROLE);
+        RAISE_BUTTON_SCENE, node);
 
-    scene = MewUI_GetSceneByName(RAISE_BUTTON_SCENE);
-    if (scene) {
-        info.scene_manager = scene;
-        info.context = NULL;
-        info.root_node = NULL;
-        info.button_node = NULL;
-        info.node_name = RAISE_BUTTON_NODE;
-        info.role_name = RAISE_BUTTON_ROLE;
-        info.label_key = NULL;
-        info.label_text = RAISE_BUTTON_LABEL;
-        info.enabled = 1U;
-        info.activate_enabled = 1U;
-        info.strict_mouse = 0U;
-        info.interact_override = MEW_BUTTON_INTERACT_FORCE_ENABLED;
-        info.can_interact_callback = NULL;
-        info.can_interact_user_data = NULL;
-        info.callback = OnRaiseButtonEvent;
-        info.user_data = NULL;
-
-        button = MewUI_SetupButtonFromNode(&info, &g_raise_button, &created);
-    }
-
+    button = MewUI_HookExistingButtonByNodeName(RAISE_BUTTON_SCENE, node,
+                                                OnRaiseButtonEvent, NULL,
+                                                &g_raise_button);
     if (!button) {
         g_raise_button = NULL;
         if (g_raise_button_attempts >= RAISE_BUTTON_MAX_ATTEMPTS) {
             g_raise_button_gave_up = 1;
-            SAY("raise button: not created after %d attempts "
-                "(scene='%s' node='%s' role='%s'); will not be retried",
-                g_raise_button_attempts, RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE,
-                RAISE_BUTTON_ROLE);
+            SAY("raise button hook: all %d candidate nodes in scene='%s' failed; "
+                "will not be retried",
+                RAISE_BUTTON_MAX_ATTEMPTS, RAISE_BUTTON_SCENE);
             return;
         }
         g_raise_button_next_attempt_tick = tick + RAISE_BUTTON_ATTEMPT_INTERVAL_TICKS;
-        SAY("raise button: attempt %d/%d failed (scene='%s' node='%s'); retry at tick %ld",
-            g_raise_button_attempts, RAISE_BUTTON_MAX_ATTEMPTS,
-            RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE,
-            (long)g_raise_button_next_attempt_tick);
+        SAY("raise button hook: node='%s' not found; next candidate at tick %ld",
+            node, (long)g_raise_button_next_attempt_tick);
         return;
     }
 
-    if (created) {
-        SAY("raise button created: scene='%s' node='%s' role='%s' label='%s' button=%p",
-            RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE, RAISE_BUTTON_ROLE,
-            RAISE_BUTTON_LABEL, button);
-    } else {
-        SAY("raise button reused: scene='%s' node='%s' role='%s' button=%p",
-            RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE, RAISE_BUTTON_ROLE, button);
-    }
     g_raise_button_ready = 1;
+    SAY("raise button hook: node='%s' hooked in scene='%s' "
+        "(game click kept, raise added) button=%p",
+        node, RAISE_BUTTON_SCENE, button);
 }
 #endif /* MEWUI_MODE == 2 */
 
 /* MewUI calls this from its scene-ready update hook once its own hooks are
  * installed, so the first call is the real "MewUI is ready" signal. In mode 1
- * it only logs that readiness; in mode 2 it also ensures the raise button
- * exists. It never writes game state. */
+ * it only logs that readiness; in mode 2 it also runs the bounded
+ * existing-button hook attempts. It never writes game state. */
 static void __cdecl OnUiTick(void* user_data) {
     LONG ticks;
     (void)user_data;
@@ -563,6 +553,10 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
                      (void**)&g_orig_cat_ui_setup);
 
         bridge_client_start(45780, BridgeLog, OnSelectCommand);
+
+        /* Runs in every mode, including mode 0 where MewUI is never started
+         * and there is no UI tick. */
+        shortcut_watcher_start(BridgeLog, CurrentCatKey, OnShortcutRaise);
 
 #if MEWUI_MODE >= 1
         MewUI_SetDebugLogsEnabled(false);
