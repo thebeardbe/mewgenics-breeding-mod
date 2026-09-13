@@ -50,7 +50,8 @@ static bridge_log_fn g_log;
 static bridge_select_fn g_on_select;
 static int g_port = BRIDGE_DEFAULT_PORT;
 static SOCKET g_sock = INVALID_SOCKET;
-static volatile LONG64 g_pending_key;   /* latest focus key, 0 = none */
+static volatile LONG64 g_pending_key;         /* latest focus key, 0 = none */
+static volatile LONG64 g_pending_raise_key;   /* latest raise key, 0 = none */
 static LONG g_started;
 static LONG g_reported_down;            /* log once per connection state */
 
@@ -134,10 +135,12 @@ static int OpenSocket(void) {
     return 1;
 }
 
-static void SendKey(int64_t key) {
+static void SendBridgeMessage(const char* type, int64_t key) {
     char message[96];
     int pos = 0;
-    pos = Append(message, pos, "{\"v\":1,\"type\":\"focus\",\"key\":");
+    pos = Append(message, pos, "{\"v\":1,\"type\":\"");
+    pos = Append(message, pos, type);
+    pos = Append(message, pos, "\",\"key\":");
     pos = AppendInt64(message, pos, key);
     pos = Append(message, pos, "}\n");
     if (g_ws.send_fn(g_sock, message, pos, 0) <= 0) {
@@ -217,7 +220,9 @@ static DWORD WINAPI BridgeWorker(LPVOID unused) {
         }
 
         key = (int64_t)InterlockedExchange64(&g_pending_key, 0);
-        if (key != 0) SendKey(key);
+        if (key != 0) SendBridgeMessage("focus", key);
+        key = (int64_t)InterlockedExchange64(&g_pending_raise_key, 0);
+        if (key != 0) SendBridgeMessage("raise", key);
         if (g_sock == INVALID_SOCKET) continue;
 
         {
@@ -280,4 +285,9 @@ void bridge_client_start(int port, bridge_log_fn log_fn, bridge_select_fn on_sel
 void bridge_client_send_key(int64_t key) {
     if (!g_started || key == 0) return;
     InterlockedExchange64(&g_pending_key, key);
+}
+
+void bridge_client_send_raise(int64_t key) {
+    if (!g_started || key == 0) return;
+    InterlockedExchange64(&g_pending_raise_key, key);
 }

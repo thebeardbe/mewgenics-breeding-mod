@@ -3,6 +3,8 @@
  *
  * Bidirectional, one persistent connection:
  *   mod -> overlay   {"v":1,"type":"focus","key":341}\n   (a cat was selected)
+ *   mod -> overlay   {"v":1,"type":"raise","key":341}\n   (the in-game MBO button was clicked;
+ *                                                     focus plus pull to front)
  *   overlay -> mod   {"v":1,"type":"select","key":341}\n  (show this cat in game)
  *
  * A single worker thread owns the socket. The game thread only ever sets a
@@ -26,5 +28,8 @@ void bridge_client_start(int port, bridge_log_fn log_fn, bridge_select_fn on_sel
 
 /*: Queue "this cat is selected" for delivery. Non-blocking. */
 void bridge_client_send_key(int64_t key);
+
+/*: Queue "bring the overlay forward for this cat" for delivery. Non-blocking. */
+void bridge_client_send_raise(int64_t key);
 
 #endif /* BREEDING_BRIDGE_CLIENT_H */

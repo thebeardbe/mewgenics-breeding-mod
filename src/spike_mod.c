@@ -31,6 +31,36 @@
 
 #define MOD_NAME "BreedingSpike"
 
+/* ── MewUI integration mode (compile-time) ────────────────────────────────
+ *   0 (default) MewUI is never started: no MewUI_Start, no MewUI hooks, no UI
+ *               tick, no button. The mod is the pre-MewUI build again: the
+ *               save-load roster, current-cat bridge, and overlay select/pane.
+ *   1           start MewUI and log readiness, but create no button and do no
+ *               scene lookup. Isolates whether MewUI by itself faults.
+ *   2           start MewUI and create the raise button from a vanilla House
+ *               node, trying a bounded number of times. The attempt count is
+ *               capped so a missing node can never flood the log or the frame
+ *               budget the way the first mode 2 build did (~94k handled faults).
+ * Override the default with -DMEWUI_MODE=N. */
+#ifndef MEWUI_MODE
+#define MEWUI_MODE 0
+#endif
+#if (MEWUI_MODE < 0) || (MEWUI_MODE > 2)
+#error "MEWUI_MODE must be 0 (off), 1 (bootstrap only), or 2 (bootstrap + button)"
+#endif
+
+#if MEWUI_MODE == 0
+#define MEWUI_MODE_NAME "off; MewUI never started"
+#elif MEWUI_MODE == 1
+#define MEWUI_MODE_NAME "bootstrap only; started, no button, no scene lookup"
+#else
+#define MEWUI_MODE_NAME "full; started, raise button enabled"
+#endif
+
+#if MEWUI_MODE >= 1
+#include "mew_ui_api.h"
+#endif
+
 /* ── game addresses (build id 25143593) ──────────────────────────────────── */
 #define RVA_MEWSAVEFILE_LOAD_CATDATA 0x230060u
 #define MEWSAVEFILE_LOAD_STOLEN_BYTES 15
@@ -89,6 +119,12 @@ static fn_open_cat_detail g_open_cat_detail = NULL;
 
 /* The CatMenu controller, cached when the game sets up the cat UI. */
 static void* volatile g_house = NULL;
+
+#if MEWUI_MODE == 2
+/* The cat key the CatMenu last made current; read by the raise button callback
+ * so a click can ask the overlay to come forward on that cat. */
+static volatile LONG64 g_current_cat_key = 0;
+#endif
 
 /* Prologue byte count for 0xE9AC0: push rbp (2, REX-prefixed) + push rbx/rsi/rdi
  * (3) + push r12/r13/r14/r15 (8) = 13, then lea rbp,[rsp-0x398] (8) = 21. A
@@ -217,7 +253,12 @@ static void __cdecl HookSetCurrentCat(void* house, void* cat, unsigned char flag
         } else {
             SAY("selected cat key=%lld (no cat data yet)", (long long)key);
         }
-        if (key > 0) bridge_client_send_key(key);
+        if (key > 0) {
+#if MEWUI_MODE == 2
+            InterlockedExchange64(&g_current_cat_key, key);
+#endif
+            bridge_client_send_key(key);
+        }
     }
 }
 
@@ -322,6 +363,158 @@ static void BridgeLog(const char* message) {
     SAY("%s", message);
 }
 
+#if MEWUI_MODE >= 1
+/* ── MewUI bootstrap (modes 1 and 2) ────────────────────────────────────── */
+
+/* Lower numbers are called first when several mods hook the same RVA. MewUI
+ * only hooks the scene-ready/button RVAs, so this only orders it against other
+ * MewUI-style mods, not against our own probes. */
+#define MEW_UI_HOOK_PRIORITY 30
+/* MewUI retries its hook install on this cadence until Mewjector is ready. */
+#define MEW_UI_BOOTSTRAP_INTERVAL_MS 100u
+/* Present for the API signature; MewUI drives work from the scene-ready hook. */
+#define MEW_UI_TICK_INTERVAL_MS 16u
+
+static volatile LONG g_ui_tick_count = 0;
+
+#if MEWUI_MODE == 2
+/* ── "bring the overlay forward" button (mode 2) ────────────────────────── */
+
+/* The button is built from an existing House SWF instance node, and its label
+ * is literal text, so it needs no localization key. RAISE_BUTTON_NODE must name
+ * a node that exists in the vanilla House UI: "nametag_button" is the per-cat
+ * nametag button in resources.gpak -> swfs/house.swf (RESEARCH.md section 4).
+ * MewUI's example SWF node "test_button" is not in the game and only produced
+ * handled faults. Changing this one define is enough to try another node. */
+#define RAISE_BUTTON_SCENE "House"
+#define RAISE_BUTTON_NODE "nametag_button"
+#define RAISE_BUTTON_ROLE "BreedingSpike_RaiseOverlay"
+#define RAISE_BUTTON_LABEL "MBO"
+
+/* The node may not be up on the first scene-ready tick, so try a few times and
+ * then give up. Between attempts the tick costs two flag tests; the scene
+ * lookup happens only inside an attempt, at most RAISE_BUTTON_MAX_ATTEMPTS
+ * times, and no attempt loop can run indefinitely. */
+#define RAISE_BUTTON_MAX_ATTEMPTS 3
+#define RAISE_BUTTON_ATTEMPT_INTERVAL_TICKS 60
+
+static void* g_raise_button = NULL;
+static int g_raise_button_ready = 0;
+static int g_raise_button_attempts = 0;
+static int g_raise_button_gave_up = 0;
+static LONG g_raise_button_next_attempt_tick = 0;
+
+static void __cdecl OnRaiseButtonEvent(void* button, MewButtonEvent event_type,
+                                       MewButtonState old_state, MewButtonState new_state,
+                                       void* user_data) {
+    int64_t key;
+    (void)user_data;
+
+    if (event_type != MEW_BUTTON_EVENT_CLICK) return;
+
+    key = (int64_t)InterlockedCompareExchange64(&g_current_cat_key, 0, 0);
+    SAY("raise button clicked: button=%p (%s -> %s) key=%lld", button,
+        MewUI_GetButtonStateName(old_state), MewUI_GetButtonStateName(new_state),
+        (long long)key);
+
+    if (key <= 0) {
+        SAY("raise button: no current cat key, raise request skipped");
+        return;
+    }
+    bridge_client_send_raise(key);
+}
+
+/* One bounded attempt: exactly one scene lookup, then one setup call. Runs at
+ * most RAISE_BUTTON_MAX_ATTEMPTS times, one attempt every
+ * RAISE_BUTTON_ATTEMPT_INTERVAL_TICKS scene-ready ticks, then stops for good. */
+static void AttemptRaiseButton(LONG tick) {
+    MewButtonCreateInfo info;
+    void* scene;
+    void* button = NULL;
+    int created = 0;
+
+    g_raise_button_attempts++;
+    SAY("raise button: attempt %d/%d scene='%s' node='%s' role='%s'",
+        g_raise_button_attempts, RAISE_BUTTON_MAX_ATTEMPTS,
+        RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE, RAISE_BUTTON_ROLE);
+
+    scene = MewUI_GetSceneByName(RAISE_BUTTON_SCENE);
+    if (scene) {
+        info.scene_manager = scene;
+        info.context = NULL;
+        info.root_node = NULL;
+        info.button_node = NULL;
+        info.node_name = RAISE_BUTTON_NODE;
+        info.role_name = RAISE_BUTTON_ROLE;
+        info.label_key = NULL;
+        info.label_text = RAISE_BUTTON_LABEL;
+        info.enabled = 1U;
+        info.activate_enabled = 1U;
+        info.strict_mouse = 0U;
+        info.interact_override = MEW_BUTTON_INTERACT_FORCE_ENABLED;
+        info.can_interact_callback = NULL;
+        info.can_interact_user_data = NULL;
+        info.callback = OnRaiseButtonEvent;
+        info.user_data = NULL;
+
+        button = MewUI_SetupButtonFromNode(&info, &g_raise_button, &created);
+    }
+
+    if (!button) {
+        g_raise_button = NULL;
+        if (g_raise_button_attempts >= RAISE_BUTTON_MAX_ATTEMPTS) {
+            g_raise_button_gave_up = 1;
+            SAY("raise button: not created after %d attempts "
+                "(scene='%s' node='%s' role='%s'); will not be retried",
+                g_raise_button_attempts, RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE,
+                RAISE_BUTTON_ROLE);
+            return;
+        }
+        g_raise_button_next_attempt_tick = tick + RAISE_BUTTON_ATTEMPT_INTERVAL_TICKS;
+        SAY("raise button: attempt %d/%d failed (scene='%s' node='%s'); retry at tick %ld",
+            g_raise_button_attempts, RAISE_BUTTON_MAX_ATTEMPTS,
+            RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE,
+            (long)g_raise_button_next_attempt_tick);
+        return;
+    }
+
+    if (created) {
+        SAY("raise button created: scene='%s' node='%s' role='%s' label='%s' button=%p",
+            RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE, RAISE_BUTTON_ROLE,
+            RAISE_BUTTON_LABEL, button);
+    } else {
+        SAY("raise button reused: scene='%s' node='%s' role='%s' button=%p",
+            RAISE_BUTTON_SCENE, RAISE_BUTTON_NODE, RAISE_BUTTON_ROLE, button);
+    }
+    g_raise_button_ready = 1;
+}
+#endif /* MEWUI_MODE == 2 */
+
+/* MewUI calls this from its scene-ready update hook once its own hooks are
+ * installed, so the first call is the real "MewUI is ready" signal. In mode 1
+ * it only logs that readiness; in mode 2 it also ensures the raise button
+ * exists. It never writes game state. */
+static void __cdecl OnUiTick(void* user_data) {
+    LONG ticks;
+    (void)user_data;
+
+    ticks = InterlockedIncrement(&g_ui_tick_count);
+    if (ticks == 1) {
+        SAY("MewUI ready: first scene-ready UI tick (owner=%s)", MOD_NAME);
+        MewUI_LogMessage("BreedingSpike: MewUI ready and ticking");
+    }
+
+#if MEWUI_MODE == 2
+    /* Cheap gate: once ready or given up this is two flag tests, and the next
+     * scene lookup only happens on a scheduled attempt tick. */
+    if (!MewUI_IsReady()) return;
+    if (g_raise_button_ready || g_raise_button_gave_up) return;
+    if (ticks < g_raise_button_next_attempt_tick) return;
+    AttemptRaiseButton(ticks);
+#endif
+}
+#endif /* MEWUI_MODE >= 1 */
+
 static void InstallProbe(const char* label, UINT_PTR rva, int stolen,
                          void* hook, void** trampoline_out) {
     int ok = g_mj.InstallHook(rva, stolen, hook, trampoline_out, 20, MOD_NAME);
@@ -347,6 +540,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         SAY("BreedingSpike loaded: mj version=%d gameBase=0x%llX",
             g_mj.GetVersion ? g_mj.GetVersion() : -1,
             (unsigned long long)(g_mj.GetGameBase ? g_mj.GetGameBase() : 0));
+        SAY("MewUI mode=%d (%s)", MEWUI_MODE, MEWUI_MODE_NAME);
 
         if (g_mj.GetGameBase) {
             UINT_PTR base = g_mj.GetGameBase();
@@ -369,6 +563,16 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
                      (void**)&g_orig_cat_ui_setup);
 
         bridge_client_start(45780, BridgeLog, OnSelectCommand);
+
+#if MEWUI_MODE >= 1
+        MewUI_SetDebugLogsEnabled(false);
+        if (MewUI_Start(MOD_NAME, MEW_UI_HOOK_PRIORITY, MEW_UI_BOOTSTRAP_INTERVAL_MS,
+                        MEW_UI_TICK_INTERVAL_MS, OnUiTick, NULL)) {
+            SAY("MewUI bootstrap started (owner=%s, debug logs off)", MOD_NAME);
+        } else {
+            SAY("MewUI bootstrap failed to start (timer queue unavailable)");
+        }
+#endif
 
         if (g_mj.VerifyHooks) {
             SAY("verify hooks -> %d corrupted", g_mj.VerifyHooks());
