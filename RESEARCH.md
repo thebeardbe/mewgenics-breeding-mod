@@ -409,8 +409,16 @@ it the game reads the cat's key at `cat + 0x80` and passes it to its own
 Hook shape: Mewjector hook on `0xEBBA0`, `stolenBytes = 0` (auto-decodes 17
 bytes: `mov [rsp+0x10],rbx` plus the register pushes plus `lea rbp,[rsp-0x27]`).
 The prologue is hook-safe (small-shadow store, no caller-frame writes), unlike
-the CatMenu open function at `0x203CC5`, whose prologue saves into caller-frame
-slots and would corrupt the caller under the trampoline.
+the CatMenu open path at `0x203CC5`.
+
+**Correction (2026-09-13) [V]:** `0x203CC5` is not a function entry at all. It is
+a branch target inside a larger function whose body reaches back through
+`0x140203C90` (it has a `0x58`-byte frame and pops it at `0x140203CB1`), so the
+register saves at `0x203CC5` write into that function's own frame. 
+`0x203CC5` only sets a byte flag at `+0x50` of the object in `rcx` and tails into
+`0x140054730` / `0x140981770`. Any future attempt to open the cat pane from the
+mod must find the enclosing function's real entry and calling convention first,
+not call this address.
 
 Proven in-game: clicking Bert logged `selected cat key=423`; next logged 424,
 previous 423, then 420/418/420 while paging. The overlay logged
