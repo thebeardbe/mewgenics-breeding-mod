@@ -172,8 +172,13 @@ jobs:
           # a branch push, and "<number>/merge" on a pull request. Slashes are
           # not good in a file name.
           bundle="MewgenicsBreedingMod-install-${GITHUB_REF_NAME//\//-}.zip"
-          rm -rf release-bundle "$bundle"
-          mkdir -p release-bundle
+          # The zip lands in release-artifacts/, which holds it and nothing else
+          # and is the exact directory the upload step names. Uploading that
+          # directory means the upload never depends on a glob matching in the
+          # workspace root: the one file in the directory is the one uploaded,
+          # whatever the ref made it be called.
+          rm -rf release-bundle release-artifacts
+          mkdir -p release-bundle release-artifacts
           # Everything flat in one folder: the three build artifacts, then the
           # installers (installers/README.md becomes README.md here), plus the
           # vendored Mewjector licence and the patch note. A flat name cannot
@@ -184,15 +189,18 @@ jobs:
           # Refresh the licence from the vendored source, so the shipped text
           # always matches the revision the patched loader was built from.
           cp vendor/upstream/mewjector/LICENSE release-bundle/MEWJECTOR-LICENSE.txt
-          (cd release-bundle && zip -X -q "../$bundle" ./*)
-          echo "Bundle: $bundle"
-          ls -l "$bundle"
+          (cd release-bundle && zip -X -q "../release-artifacts/$bundle" ./*)
+          echo "Bundle: release-artifacts/$bundle"
+          ls -l "release-artifacts/$bundle"
 
       - name: Upload the installer bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
+          # Same artifact name the release job downloads. The assembly step
+          # above leaves exactly one zip in release-artifacts/, so this uploads
+          # that directory wholesale; no pattern has to match.
           name: MewgenicsBreedingMod-install
-          path: MewgenicsBreedingMod-install-*.zip
+          path: release-artifacts/
           if-no-files-found: error
 
   release:
@@ -205,6 +213,8 @@ jobs:
       - name: Download the installer bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          # The artifact the build job uploaded; it carries exactly one file,
+          # MewgenicsBreedingMod-install-<ref>.zip, at its root.
           name: MewgenicsBreedingMod-install
           path: bundle
 
@@ -214,6 +224,10 @@ jobs:
           # The workflow's own token: no extra secret to configure.
           token: ${{ github.token }}
           fail_on_unmatched_files: true
+          # The single zip inside download-artifact's bundle/ directory, i.e.
+          # the file the build job put in release-artifacts/. Listing *.zip
+          # rather than repeating the ref-derived name keeps a tag containing a
+          # slash from silently mismatching the sanitized file name.
           files: bundle/*.zip
           body: |
             ## Mewgenics Breeding Mod ${{ github.ref_name }}
