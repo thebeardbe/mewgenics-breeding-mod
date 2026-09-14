@@ -17,7 +17,8 @@ The installers expect the three artifacts beside them. Keep an unpacked release
 folder together:
 
 ```
-install.bat   install.ps1   install.sh   proton-registry.sh   README.md
+install.bat   uninstall.bat   install.ps1   README.md
+install.sh    uninstall.sh    proton-registry.sh
 version.dll   chainloader.ini   BreedingSpike.dll
 ```
 
@@ -39,6 +40,9 @@ prefix override); keep it beside the others.
 Double-click `install.bat` (or run
 `powershell -ExecutionPolicy Bypass -File install.ps1`).
 
+Uninstall by double-clicking `uninstall.bat`, which asks for confirmation first
+and names the game folder it is about to clean.
+
 The installer finds Mewgenics through the Steam library folders, backs up any
 file it replaces, skips files that are already up to date, and refuses to run
 while the game is open. Useful flags:
@@ -53,7 +57,9 @@ No registry changes and no Steam launch options are needed on Windows.
 
 ## Linux and NixOS (Proton)
 
-Run `./install.sh`. It needs one Steam launch option, set in
+Run `./install.sh`, and uninstall with `./uninstall.sh`, which asks for
+confirmation first and names the game folder it is about to clean. The install
+needs one Steam launch option, set in
 `Steam -> Mewgenics -> Properties -> Launch Options`:
 
 ```
@@ -94,15 +100,21 @@ incomplete and it cannot be checked), it keeps the record, rewritten to list
 only the files still present, and says so. The record is deleted only once
 everything it lists is gone, so a later run can finish the cleanup.
 
-- Windows: run `install.ps1 -Uninstall`.
-- Linux/NixOS: run `./install.sh --uninstall`, same behavior.
+- Windows: run `uninstall.bat` (double-click it).
+- Linux/NixOS: run `./uninstall.sh`, which is the same uninstall.
+
+Both wrappers only ask for confirmation, naming the game folder, and then hand
+over to the installer, so uninstalling is as easy as installing. A second run is
+safe, and without a terminal to ask on the Linux one stops rather than assuming
+yes.
 
 If there is no record, uninstall removes nothing and says so, naming every file
 it deliberately leaves. That protects a game folder that was set up by Mewtator
 or a manual Mewjector install rather than through these scripts.
 
-`-DryRun` / `--dry-run` with `-Uninstall` / `--uninstall` shows what would be
-restored without changing anything.
+`-DryRun` / `--dry-run` shows what would be restored without changing anything,
+and the uninstall wrappers take it too (`uninstall.bat -DryRun`,
+`./uninstall.sh --dry-run`).
 
 The installers never remove `mod_logs/`, saves, or any other game file. Delete
 `mod_logs/` by hand if you want the loader logs gone.

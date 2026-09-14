@@ -4,8 +4,10 @@ In-game bridge for the [Mewgenics Breeding Overlay](../mewgenics-breeding-overla
 Long-term goal: add buttons in Mewgenics that load a cat into the overlay, and
 eventually show the overlay's breeding analysis inside the game.
 
-**Status: research / spike phase. Do not install yet unless you are helping
-test.** Nothing here is a finished feature.
+**Status: early testing.** The mod works on Linux under Proton (selection both
+ways, the cat detail pane, save following) and has a one-click installer. The
+Windows installer has not been run on real Windows yet, which is the test in
+progress. Treat it as a beta.
 
 Read [`RESEARCH.md`](RESEARCH.md) first. It is the map of the modding stack, the
 game internals we have reversed, the RVAs, and the open questions.
@@ -39,7 +41,8 @@ src/shortcut_watcher.c always-on Ctrl+Shift+B watcher: raise the overlay in any 
 src/crt_shim.c        KERNEL32-only mem/str/heap replacements for MewUI's CRT calls
 src/crt_format.c      the snprintf/vsnprintf/_snwprintf half of that shim
 tools/smoke/          Wine tests for the loader pipeline and the sender
-installers/           one-click installers (Windows, plus Linux/Proton)
+installers/           one-click installers and uninstallers (Windows, plus
+                      Linux/Proton)
 vendor/sync.sh        fetch pinned mewjector + mewui revisions
 RESEARCH.md           findings, RVAs, references
 ```
@@ -72,27 +75,57 @@ checks `mod_logs/chainloader.log`.
   CRT-free (importing only `KERNEL32.dll`) as a precaution, but neither was what
   fixed the crash. See `RESEARCH.md` for the corrected account.
 
-## Installing in the game (Steam + Proton)
+## Install
 
-For a scripted one-click install (Windows first, plus Linux/Proton), see
-[`installers/README.md`](installers/README.md). The manual steps below place the
-same files by hand.
+The mod ships as `MewgenicsBreedingMod-install.zip`. It holds the three mod
+files (`version.dll`, `chainloader.ini`, `BreedingSpike.dll`) and the installer
+scripts for both systems, flat in one folder. Unpack it anywhere and keep the
+folder together. Releases publish it on the
+[releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
+None is published yet, so until one is you can build the same zip yourself:
+`./build.sh`, then pack the contents of `installers/` together with the three
+files from `dist/`.
 
-1. Build (`./build.sh`).
-2. Copy `dist/version.dll` and `dist/chainloader.ini` into the game directory:
-   `~/.local/share/Steam/steamapps/common/Mewgenics/`
-3. Create `mods/` there and copy `dist/BreedingSpike.dll` into it.
-4. **Required on Linux/Proton:** force Wine to use our `version.dll` instead of
-   its builtin. Steam -> Mewgenics -> Properties -> Launch Options:
-   `WINEDLLOVERRIDES="version=n,b" %command%`
-5. Launch the game and load a save. Then read:
-   `~/.local/share/Steam/steamapps/common/Mewgenics/mod_logs/chainloader.log`
+### Windows
 
-You should see the banner, the hook install line, and one
-`cat key=... sqlKey=... name="..."` line per cat loaded.
+1. Unpack the zip.
+2. Double-click `install.bat`.
+3. Start Mewgenics normally. Windows needs no launch option and no registry
+   change.
+4. To undo, double-click `uninstall.bat`.
 
-To uninstall: delete `version.dll`, `chainloader.ini`, `mods/BreedingSpike.dll`,
-and `mod_logs/`.
+### Linux and NixOS (Proton)
+
+1. Unpack the zip.
+2. Run `./install.sh` in a terminal.
+3. Set this Steam launch option (Mewgenics -> Properties -> Launch Options):
+
+   ```
+   WINEDLLOVERRIDES="version=n,b" %command%
+   ```
+
+   Wine prefers its own `version.dll`, so this override is what makes the game
+   load ours. The `,b` matters just as much; see Proton constraints above.
+4. Start Mewgenics normally.
+5. To undo, run `./uninstall.sh`.
+
+### Uninstall and dry runs
+
+Both uninstallers ask for confirmation first and name the game folder, remove
+only the files the installer recorded, and put back anything it replaced from
+its timestamped backup. Declining, or running one twice, removes nothing. Both
+refuse to run while Mewgenics is open. `-DryRun` (Windows) and `--dry-run`
+(Linux) report what would happen and change nothing, for install and uninstall
+alike.
+
+**Achievements stay ON** for this standalone mod: nothing in the zip passes
+`-modpaths` or enables the debug console, the only two things the game checks
+before it turns Steam achievements off for the session.
+
+After a launch, `<game folder>/mod_logs/chainloader.log` shows a banner, the hook
+install line and one `cat key=... sqlKey=... name="..."` line per cat loaded.
+Placing the files by hand, the flags, and what each file does are all in
+[`installers/README.md`](installers/README.md).
 
 ## Achievement note
 
