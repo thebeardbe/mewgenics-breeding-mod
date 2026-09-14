@@ -39,6 +39,7 @@ src/shortcut_watcher.c always-on Ctrl+Shift+B watcher: raise the overlay in any 
 src/crt_shim.c        KERNEL32-only mem/str/heap replacements for MewUI's CRT calls
 src/crt_format.c      the snprintf/vsnprintf/_snwprintf half of that shim
 tools/smoke/          Wine tests for the loader pipeline and the sender
+installers/           one-click installers (Windows, plus Linux/Proton)
 vendor/sync.sh        fetch pinned mewjector + mewui revisions
 RESEARCH.md           findings, RVAs, references
 ```
@@ -72,6 +73,10 @@ checks `mod_logs/chainloader.log`.
   fixed the crash. See `RESEARCH.md` for the corrected account.
 
 ## Installing in the game (Steam + Proton)
+
+For a scripted one-click install (Windows first, plus Linux/Proton), see
+[`installers/README.md`](installers/README.md). The manual steps below place the
+same files by hand.
 
 1. Build (`./build.sh`).
 2. Copy `dist/version.dll` and `dist/chainloader.ini` into the game directory:
