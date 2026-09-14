@@ -1,0 +1,178 @@
+name: release
+
+# Builds the downloadable installer bundle and publishes it for a version tag.
+#
+#   git tag vX.Y.Z && git push origin vX.Y.Z
+#
+# The tag is the version. Everything else (build through the pinned Nix dev
+# shell, the KERNEL32-only check, the bundle, the GitHub Release) is done here.
+#
+# Pull requests and pushes to the default branch run the same build so breakage
+# shows up before a release, but only a v* tag creates a Release.
+#
+# Manual run: Actions -> release -> Run workflow.
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Read-only by default. The release job is the only one that needs to write,
+# and it asks for contents: write itself.
+permissions:
+  contents: read
+
+# One run per ref at a time. A newer push to the same branch or PR cancels the
+# older run, but a tag never cancels: an interrupted release would leave a
+# half-assembled artifact behind.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: flake.lock is committed
+        run: |
+          if [ ! -f flake.lock ]; then
+            echo "::error::flake.lock is missing; the build would not be reproducible."
+            exit 1
+          fi
+          echo "flake.lock present"
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          # Authenticates the flake input fetches, so a busy tag does not hit
+          # GitHub's anonymous rate limit and fail for the wrong reason.
+          github_access_token: ${{ github.token }}
+
+      - name: Build through the pinned dev shell
+        run: nix develop --command ./build.sh
+
+      - name: Both DLLs import only KERNEL32
+        run: |
+          nix develop --command bash -euo pipefail - <<'BASH'
+          # Our mod DLL and the official Mewjector loader must import KERNEL32
+          # only. A zig/mingw build that pulls in api-ms-win-crt-* loads under
+          # Wine but crashes the game at launch under Proton, so a stray import
+          # is a release blocker, not a warning.
+          for dll in dist/version.dll dist/BreedingSpike.dll; do
+            if [ ! -f "$dll" ]; then
+              echo "::error::$dll was not built"
+              exit 1
+            fi
+            mapfile -t imports < <(objdump -p "$dll" | awk '/^[[:space:]]*DLL Name:/{print $3}')
+            if [ "${#imports[@]}" -eq 0 ]; then
+              echo "::error::objdump reported no imports for $dll; the check cannot trust its input"
+              exit 1
+            fi
+            for import in "${imports[@]}"; do
+              if [ "${import,,}" != "kernel32.dll" ]; then
+                echo "::error::$dll imports $import; only KERNEL32.dll is allowed"
+                exit 1
+              fi
+            done
+            echo "$dll imports only KERNEL32.dll (${#imports[@]} import(s))"
+          done
+          BASH
+
+      - name: Run shell checks (if any)
+        run: |
+          nix develop --command bash -euo pipefail - <<'BASH'
+          # Checks live wherever the repository puts them and are discovered by
+          # name, not listed here. A "check*.sh" script is run with bash and
+          # must exit non-zero to fail the build. Vendored, build, log, and
+          # scratch trees are skipped. With no checks present this step passes
+          # cleanly.
+          mapfile -t checks < <(
+            find . \
+              \( -name .git -o -name dist -o -name vendor -o -name mod_logs \
+                 -o -name .scratch \) -prune -o \
+              -type f -name 'check*.sh' -print | sort
+          )
+          if [ "${#checks[@]}" -eq 0 ]; then
+            echo "No check*.sh scripts found; skipping shell checks."
+            exit 0
+          fi
+          status=0
+          for check in "${checks[@]}"; do
+            echo "==> $check"
+            if ! bash "$check"; then
+              echo "::error::$check failed"
+              status=1
+            fi
+          done
+          exit "$status"
+          BASH
+
+      - name: Assemble the installer bundle
+        run: |
+          set -euo pipefail
+          # GITHUB_REF_NAME is the tag on a tagged run ("v1.2.3"), the branch on
+          # a branch push, and "<number>/merge" on a pull request. Slashes are
+          # not good in a file name.
+          bundle="MewgenicsBreedingMod-install-${GITHUB_REF_NAME//\//-}.zip"
+          rm -rf release-bundle "$bundle"
+          mkdir -p release-bundle
+          # Everything flat in one folder: the three build artifacts, then the
+          # installers (installers/README.md becomes README.md here). A flat
+          # name cannot also hold the root README, which is developer-facing and
+          # links to files that are not in the bundle, so it is not shipped.
+          cp dist/version.dll dist/chainloader.ini dist/BreedingSpike.dll release-bundle/
+          cp installers/* release-bundle/
+          (cd release-bundle && zip -X -q "../$bundle" ./*)
+          echo "Bundle: $bundle"
+          ls -l "$bundle"
+
+      - name: Upload the installer bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: MewgenicsBreedingMod-install
+          path: MewgenicsBreedingMod-install-*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download the installer bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: MewgenicsBreedingMod-install
+          path: bundle
+
+      - name: Create or update the GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          # The workflow's own token: no extra secret to configure.
+          token: ${{ github.token }}
+          fail_on_unmatched_files: true
+          files: bundle/*.zip
+          body: |
+            ## Mewgenics Breeding Mod ${{ github.ref_name }}
+
+            The installer bundle is
+            `MewgenicsBreedingMod-install-${{ github.ref_name }}.zip`.
+
+            It contains, flat in one folder:
+
+            - `version.dll` and `chainloader.ini`: the official Mewjector v3.4 loader
+            - `BreedingSpike.dll`: the mod
+            - `install.bat`, `install.ps1`, `uninstall.bat`: the Windows installer and uninstaller
+            - `install.sh`, `uninstall.sh`, `proton-registry.sh`: the Linux / Proton installer and uninstaller
+            - `README.md`: the install steps for both systems
+
+            Unpack the zip anywhere, keep the folder together, and follow
+            `README.md` inside it. The same steps are in the repository's
+            [Install section](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md#install).

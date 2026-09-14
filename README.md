@@ -56,6 +56,30 @@ nix develop          # or: nix-shell
 
 Produces `dist/version.dll`, `dist/chainloader.ini`, `dist/BreedingSpike.dll`.
 
+## Release
+
+The tag is the version. Cutting a release is just:
+
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml))
+does the rest: it builds through the pinned Nix dev shell, fails if either DLL
+imports anything but `KERNEL32.dll`, runs any `check*.sh` scripts the repository
+ships, packs the installer bundle, and publishes it on the
+[releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
+
+That bundle is `MewgenicsBreedingMod-install-vX.Y.Z.zip`: the three files from
+`dist/`, plus everything in `installers/` (both installers, both uninstallers,
+`proton-registry.sh`, and the install README), flat in one folder. Pushes and
+pull requests to `master` run the same build, but only a tag creates a release.
+
+A fast shell check can live anywhere in the repository as a `check*.sh` script;
+CI discovers and runs every one of them. There are none today, so that step
+passes cleanly.
+
 ## Local smoke test (no game)
 
 ```bash
@@ -77,10 +101,12 @@ checks `mod_logs/chainloader.log`.
 
 ## Install
 
-The mod ships as `MewgenicsBreedingMod-install.zip`. It holds the three mod
-files (`version.dll`, `chainloader.ini`, `BreedingSpike.dll`) and the installer
-scripts for both systems, flat in one folder. Unpack it anywhere and keep the
-folder together. Releases publish it on the
+The mod ships as `MewgenicsBreedingMod-install-vX.Y.Z.zip` (tagged releases;
+see [Release](#release)). It holds the three mod files (`version.dll`,
+`chainloader.ini`, `BreedingSpike.dll`) and the installer scripts for both
+systems, flat in one folder, with the install steps in the bundle's
+`README.md`. Unpack it anywhere and keep the folder together. Releases publish
+it on the
 [releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
 None is published yet, so until one is you can build the same zip yourself:
 `./build.sh`, then pack the contents of `installers/` together with the three
