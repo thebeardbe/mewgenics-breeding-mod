@@ -86,7 +86,7 @@ jobs:
 
       - name: Run shell checks in tests/ (if any)
         run: |
-          nix develop --command bash -euo pipefail - <<'BASH'
+          bash -euo pipefail - <<'BASH'
           # The repository keeps its shell checks in "tests" directories and
           # they are discovered, never listed here, so adding a check needs no
           # workflow change. Each one runs with bash and must exit non-zero to
@@ -138,7 +138,14 @@ jobs:
           status=0
           for check in "${checks[@]}"; do
             echo "==> $check"
-            if ! bash "$check"; then
+            # Each check runs inside the pinned dev shell (the cross-compiler
+            # the checks build with) and with Wine from nixpkgs on top (one
+            # check runs the built DLL under Wine). PWSH is exported above and
+            # inherited through both nix layers, so the checks that drive the
+            # PowerShell installers still work. These checks run on every run,
+            # not only on tags, so breakage shows up before a release rather
+            # than at tag time; the Wine download roughly doubles the job time.
+            if ! nix develop --command bash -c 'nix shell nixpkgs#wine64 --command bash "$@"' _ "$check"; then
               echo "::error::$check failed"
               status=1
             fi

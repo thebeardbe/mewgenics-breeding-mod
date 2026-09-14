@@ -67,8 +67,9 @@ git push origin vX.Y.Z
 
 GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml))
 does the rest: it builds through the pinned Nix dev shell, fails if either DLL
-imports anything but `KERNEL32.dll`, runs any `check*.sh` scripts the repository
-ships, packs the installer bundle, and publishes it on the
+imports anything but `KERNEL32.dll`, runs the shell checks the repository ships
+(every executable shell script under a `tests/` directory, run inside the dev
+shell with Wine available), packs the installer bundle, and publishes it on the
 [releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
 
 That bundle is `MewgenicsBreedingMod-install-vX.Y.Z.zip`: the three files from
@@ -76,9 +77,10 @@ That bundle is `MewgenicsBreedingMod-install-vX.Y.Z.zip`: the three files from
 `proton-registry.sh`, and the install README), flat in one folder. Pushes and
 pull requests to `master` run the same build, but only a tag creates a release.
 
-A fast shell check can live anywhere in the repository as a `check*.sh` script;
-CI discovers and runs every one of them. There are none today, so that step
-passes cleanly.
+A shell check is any executable shell script under a `tests/` directory; CI
+discovers and runs all of them with the cross-compiler and Wine available, so a
+check that builds a DLL and runs it under Wine works too. A non-zero exit from
+any check fails the job.
 
 ## Local smoke test (no game)
 
