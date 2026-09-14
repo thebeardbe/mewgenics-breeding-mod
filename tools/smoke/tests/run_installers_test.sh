@@ -140,7 +140,9 @@ make_bundle() { # dir [payload-name...]
   mkdir -p "$dir"
   cp -p "$REPO_ROOT/installers/install.sh" "$dir/install.sh"
   cp -p "$REPO_ROOT/installers/proton-registry.sh" "$dir/proton-registry.sh"
+  cp -p "$REPO_ROOT/installers/loader-release.sh" "$dir/loader-release.sh"
   cp -p "$REPO_ROOT/installers/install.ps1" "$dir/install.ps1"
+  cp -p "$REPO_ROOT/installers/loader-release.ps1" "$dir/loader-release.ps1"
   chmod +x "$dir/install.sh" "$dir/proton-registry.sh"
 
   local name
@@ -160,6 +162,37 @@ mkdir -p "$WORK/fixtures"
 printf 'a file the installer must never touch\n' > "$WORK/fixtures/decoy.txt"
 printf 'previous loader log\n' > "$WORK/fixtures/chainloader.log"
 
+# A local stand-in for an official Mewjector release whose chainloader.ini does
+# NOT carry EnableEPFallback. Every installer run that is not specifically about
+# the upstream resolution points MEWJECTOR_RELEASE_OVERRIDE at this folder, so
+# the offline checks never touch the network and choose the bundled loader.
+STANDIN_NOFIX="$WORK/standin-nofix"
+mkdir -p "$STANDIN_NOFIX"
+printf 'STANDIN-LOADER-NOFIX\n' > "$STANDIN_NOFIX/version.dll"
+printf '[chainloader]\nmods=mods\n' > "$STANDIN_NOFIX/chainloader.ini"
+
+# The exact line both installers end with. The loader line must sit right above
+# it, and this wording must not change.
+ACHIEVEMENTS_LINE='*** ACHIEVEMENTS STAY ON: nothing here passes -modpaths or enables the debug console, the only two things the game checks before it disables Steam achievements. ***'
+
+# The loader line must be the line immediately above the achievements line.
+expect_loader_above_achievements() { # out-file desc
+  local file="$1" desc="$2" prev='' line found=0
+  while IFS= read -r line; do
+    if [ "$line" = "$ACHIEVEMENTS_LINE" ]; then
+      found=$((found + 1))
+      case "$prev" in
+        '       loader: '*) pass "$desc" ;;
+        *) fail "$desc: line above achievements was [$prev]" ;;
+      esac
+    fi
+    prev="$line"
+  done < "$file"
+  if [ "$found" -ne 1 ]; then
+    fail "$desc: achievements line found $found time(s), want exactly 1"
+  fi
+}
+
 LAST_OUT=""
 RC=0
 
@@ -167,7 +200,9 @@ run_installer() { # bundle args...
   local bundle="$1"
   shift
   LAST_OUT="$WORK/last-installer.out"
-  if env -u MEWGENICS_DIR HOME="$FAKE_HOME" "$bundle/install.sh" "$@" > "$LAST_OUT" 2>&1; then
+  if env -u MEWGENICS_DIR HOME="$FAKE_HOME" \
+       MEWJECTOR_RELEASE_OVERRIDE="$STANDIN_NOFIX" \
+       "$bundle/install.sh" "$@" > "$LAST_OUT" 2>&1; then
     RC=0
   else
     RC=$?
@@ -181,7 +216,9 @@ run_installer_shim() { # bindir bundle args...
   local bundle="$2"
   shift 2
   LAST_OUT="$WORK/last-installer.out"
-  if env -u MEWGENICS_DIR HOME="$FAKE_HOME" PATH="$bindir:$PATH" "$bundle/install.sh" "$@" > "$LAST_OUT" 2>&1; then
+  if env -u MEWGENICS_DIR HOME="$FAKE_HOME" \
+       MEWJECTOR_RELEASE_OVERRIDE="$STANDIN_NOFIX" \
+       PATH="$bindir:$PATH" "$bundle/install.sh" "$@" > "$LAST_OUT" 2>&1; then
     RC=0
   else
     RC=$?
@@ -246,6 +283,9 @@ test_real_install() {
   expect_fixed "$LAST_OUT" 'install complete: 3 written, 0 already up to date, 0 backed up.' "reports 3 written"
   expect_content "$WORK/fixtures/decoy.txt" "$game/decoy.txt" "unrelated game file untouched"
   expect_content "$WORK/fixtures/chainloader.log" "$game/mod_logs/chainloader.log" "existing mod_logs/ untouched"
+  expect_fixed "$LAST_OUT" 'loader: bundled patched Mewjector - upstream override does not carry the fix yet; using the bundled patched loader' "loader line explains the bundled choice"
+  expect_fixed "$LAST_OUT" "$ACHIEVEMENTS_LINE" "achievements wording is unchanged"
+  expect_loader_above_achievements "$LAST_OUT" "the loader line sits immediately above the achievements line"
 }
 
 test_install_writes_record() {
@@ -609,6 +649,21 @@ test_missing_helper_and_bad_args() {
   expect_eq 1 "$RC" "missing proton-registry.sh fails"
   expect_fixed "$LAST_OUT" 'proton-registry.sh is missing' "names the missing helper"
 
+  # loader-release.sh is the other helper install.sh sources; it must fail
+  # loudly with its own name too, or an incomplete bundle would install the
+  # wrong loader (or crash) instead of saying what is wrong.
+  local bundle_noloader="$WORK/bundle-noloader"
+  mkdir -p "$bundle_noloader"
+  cp -p "$REPO_ROOT/installers/install.sh" "$bundle_noloader/install.sh"
+  cp -p "$REPO_ROOT/installers/proton-registry.sh" "$bundle_noloader/proton-registry.sh"
+  chmod +x "$bundle_noloader/install.sh"
+  write_payload_file "$bundle_noloader" version.dll
+  write_payload_file "$bundle_noloader" chainloader.ini
+  write_payload_file "$bundle_noloader" BreedingSpike.dll
+  run_installer "$bundle_noloader" --game-dir "$game"
+  expect_eq 1 "$RC" "missing loader-release.sh fails"
+  expect_fixed "$LAST_OUT" 'loader-release.sh is missing' "names the missing loader helper"
+
   run_installer "$BUNDLE" --bogus
   expect_eq 1 "$RC" "unknown argument fails"
   expect_fixed "$LAST_OUT" 'unknown argument: --bogus' "names the unknown argument"
@@ -720,7 +775,9 @@ find_pwsh
 
 run_pwsh() { # args...
   LAST_OUT="$WORK/last-pwsh.out"
-  if "$PWSH" -NoProfile -NonInteractive "$@" > "$LAST_OUT" 2>&1; then
+  if env -u MEWGENICS_DIR HOME="$FAKE_HOME" \
+       MEWJECTOR_RELEASE_OVERRIDE="$STANDIN_NOFIX" \
+       "$PWSH" -NoProfile -NonInteractive "$@" > "$LAST_OUT" 2>&1; then
     RC=0
   else
     RC=$?
@@ -771,6 +828,18 @@ test_ps1() {
   run_pwsh -File "$bundle/install.ps1" -DryRun -GameDir "$game"
   expect_eq 1 "$RC" "install.ps1 fails when an artifact is missing"
   expect_fixed "$LAST_OUT" 'the installer payload is incomplete' "install.ps1 says the payload is incomplete"
+
+  # 3b. install.ps1 dot-sources loader-release.ps1; a bundle without it must
+  # fail loudly rather than silently skip the loader resolution.
+  local no_loader_bundle="$WORK/ps-no-loader-bundle"
+  mkdir -p "$no_loader_bundle"
+  cp -p "$REPO_ROOT/installers/install.ps1" "$no_loader_bundle/install.ps1"
+  write_payload_file "$no_loader_bundle" version.dll
+  write_payload_file "$no_loader_bundle" chainloader.ini
+  write_payload_file "$no_loader_bundle" BreedingSpike.dll
+  run_pwsh -File "$no_loader_bundle/install.ps1" -DryRun -GameDir "$game"
+  expect_eq 1 "$RC" "install.ps1 missing loader-release.ps1 fails"
+  expect_fixed "$LAST_OUT" 'loader-release.ps1 is missing' "install.ps1 names the missing loader helper"
 
   # 4. A non-existent game folder is refused.
   run_pwsh -File "$bundle/install.ps1" -DryRun -GameDir "$WORK/ps-does-not-exist"

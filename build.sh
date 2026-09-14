@@ -2,17 +2,20 @@
 # Build the Windows artifacts into dist/.
 #
 #   ./build.sh                    # dist/version.dll (official) + BreedingSpike.dll
+#   ./build.sh --patched          # everything, with version.dll built from source + our patch
 #   ./build.sh mod                # only our mod DLL
 #   ./build.sh loader             # only the official version.dll + chainloader.ini
-#   ./build.sh loader --patched   # build version.dll from source + our patch (test only)
+#   ./build.sh loader --patched   # build version.dll from source + our patch
 #   ./build.sh loader --from-source   # build Mewjector from source with zig (NOT Proton-safe)
 #   MEWUI_MODE=1 ./build.sh mod  # compile the mod with MewUI mode N (0-2, default 0)
 #
 # Two hard-won rules live here:
 #
-#  1. The shipped loader is the official Mewjector release. It imports only
-#     KERNEL32.dll. A zig/mingw build of the same source imports api-ms-win-crt-*
-#     and the game crashes at launch under Proton.
+#  1. Every shipped DLL imports only KERNEL32.dll. The official Mewjector
+#     release is built that way; our patched loader and our mod get there with
+#     -nostdlib plus src/crt_shim.c, src/crt_format.c and (for the loader)
+#     src/loader_crt.c. A zig/mingw build that links the dynamic UCRT imports
+#     api-ms-win-crt-* and the game crashes at launch under Proton.
 #  2. Our mod DLL must be KERNEL32-only too. zig's default CRT pulls in
 #     api-ms-win-crt-*, so we link with -nostdlib, our own entry point, and
 #     kernel32 only. Our own sources avoid the C runtime (formatting goes
@@ -47,14 +50,29 @@ mkdir -p "$OUT"
 build_loader() {
   local mode="${1:-}"
   if [ "$mode" = "--patched" ]; then
-    echo "==> version.dll (Mewjector, patched: EnableEPFallback + Logging)"
+    echo "==> version.dll (Mewjector, patched: EnableEPFallback + Logging, KERNEL32-only)"
     local work="$OUT/.mewjector-patched"
-    rm -rf "$work"
-    mkdir -p "$work"
+    local shim="$OUT/.loader-obj"
+    rm -rf "$work" "$shim"
+    mkdir -p "$work" "$shim"
     cp -r "$UP/mewjector" "$work/mewjector"
-    patch -p1 -d "$work" < "$PWD/patches/mewjector-epfallback-and-logging.patch"
-    $ZIG cc $TARGET $CFLAGS -shared \
+    patch -p1 -d "$work/mewjector" < "$PWD/patches/mewjector-epfallback-and-logging.patch"
+    # Same CRT-free recipe as the mod (rule 1): -nostdlib, our shim sources,
+    # KERNEL32 only. compiler-rt supplies the SEH handler and stack probe.
+    $ZIG cc $TARGET $CFLAGS -ffreestanding -fno-builtin -c \
+      $MINGW_INCLUDES -Isrc \
+      -o "$shim/crt_shim.o" src/crt_shim.c
+    $ZIG cc $TARGET $CFLAGS -ffreestanding -fno-builtin -c \
+      $MINGW_INCLUDES -Isrc \
+      -o "$shim/crt_format.o" src/crt_format.c
+    $ZIG cc $TARGET $CFLAGS -ffreestanding -fno-builtin -c \
+      $MINGW_INCLUDES -Isrc \
+      -o "$shim/loader_crt.o" src/loader_crt.c
+    $ZIG cc $TARGET $CFLAGS -shared -nostdlib \
+      $MINGW_INCLUDES -Isrc -lkernel32 -lcompiler_rt \
+      -Wl,--entry,DllMain \
       -o "$OUT/version.dll" \
+      "$shim/loader_crt.o" "$shim/crt_shim.o" "$shim/crt_format.o" \
       "$work/mewjector/version.c" "$work/mewjector/version.def"
     cp "$work/mewjector/chainloader.ini" "$OUT/chainloader.ini"
     return
@@ -118,7 +136,9 @@ case "$what" in
   all)    build_loader "$@"; build_mod ;;
   mod)    build_mod ;;
   loader) build_loader "$@" ;;
-  *) echo "usage: $0 [all|mod|loader] [--from-source]" >&2; exit 2 ;;
+  # Shorthand for the common release build: the patched loader plus the mod.
+  --patched) build_loader --patched; build_mod ;;
+  *) echo "usage: $0 [all|mod|loader|--patched] [--patched|--from-source]" >&2; exit 2 ;;
 esac
 
 echo

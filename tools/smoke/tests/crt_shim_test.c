@@ -246,6 +246,78 @@ static void test_integers(void)
               (unsigned long long)((size_t)1 << 40));
 }
 
+/* GCC's printf checker does not know MSVC's %I/%I32/%I64 modifier: it reads
+ * the I as the glibc "I" flag and then guesses the wrong argument types. The
+ * tests below pass the width MSVC expects, so the warning is silenced here. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat"
+
+/* MSVC's I length modifier: %I is size_t (pointer-sized), %I32 a 32-bit
+ * value, %I64 a 64-bit one, in every integer conversion. The patched
+ * Mewjector loader writes pointer-sized values with %IX (and _snprintf), so
+ * the mixed case below is the regression guard: a formatter that copied 
+ * "%I" literally would never consume the size_t argument and the %d and %p
+ * that follow would read the wrong ones. */
+static void test_i_length_modifier(void)
+{
+    /* Bare I is size_t, i.e. 8 bytes on this 64-bit target. */
+    CHECK_SNF("I u max", "18446744073709551615", 20, sizeof out, "%Iu",
+              (unsigned long long)-1);
+    CHECK_SNF("I u zero", "0", 1, sizeof out, "%Iu", (unsigned long long)0);
+    CHECK_SNF("I d positive", "42", 2, sizeof out, "%Id", (long long)42);
+    CHECK_SNF("I d negative", "-42", 3, sizeof out, "%Id", (long long)-42);
+    CHECK_SNF("I x", "deadbeef", 8, sizeof out, "%Ix", (unsigned long long)0xDEADBEEFu);
+    CHECK_SNF("I X", "DEADBEEF", 8, sizeof out, "%IX", (unsigned long long)0xDEADBEEFu);
+    CHECK_SNF("I o", "10", 2, sizeof out, "%Io", (unsigned long long)8);
+
+    /* I32 is a 32-bit value, so UINT_MAX must not be sign-extended. */
+    CHECK_SNF("I32 d", "42", 2, sizeof out, "%I32d", (long)42);
+    CHECK_SNF("I32 d negative", "-42", 3, sizeof out, "%I32d", (long)-42);
+    CHECK_SNF("I32 u max", "4294967295", 10, sizeof out, "%I32u", (unsigned long)0xFFFFFFFFu);
+    CHECK_SNF("I32 x", "deadbeef", 8, sizeof out, "%I32x", (unsigned long)0xDEADBEEFu);
+    CHECK_SNF("I32 X", "DEADBEEF", 8, sizeof out, "%I32X", (unsigned long)0xDEADBEEFu);
+    CHECK_SNF("I32 o max", "37777777777", 11, sizeof out, "%I32o", (unsigned long)0xFFFFFFFFu);
+
+    /* I64 is a 64-bit value, so the high word must be read. */
+    CHECK_SNF("I64 d min", "-9223372036854775808", 20, sizeof out, "%I64d",
+              (long long)(-9223372036854775807LL - 1LL));
+    CHECK_SNF("I64 u max", "18446744073709551615", 20, sizeof out, "%I64u",
+              (unsigned long long)-1);
+    CHECK_SNF("I64 x", "deadbeefcafebabe", 16, sizeof out, "%I64x",
+              (unsigned long long)0xDEADBEEFCAFEBABEULL);
+    CHECK_SNF("I64 X", "DEADBEEFCAFEBABE", 16, sizeof out, "%I64X",
+              (unsigned long long)0xDEADBEEFCAFEBABEULL);
+    CHECK_SNF("I64 o max", "1777777777777777777777", 22, sizeof out, "%I64o",
+              (unsigned long long)-1);
+
+    /* Flags and width apply to the I forms like any other length. */
+    CHECK_SNF("I zero pad", "0000000000001234", 16, sizeof out, "%016IX",
+              (unsigned long long)0x1234u);
+    CHECK_SNF("I32 zero pad", "000000ab", 8, sizeof out, "%08I32x", (unsigned long)0xABu);
+    CHECK_SNF("I64 zero pad", "00000000000000FF", 16, sizeof out, "%016I64X",
+              (unsigned long long)0xFFu);
+    CHECK_SNF("I32 plus flag", "+42", 3, sizeof out, "%+I32d", (long)42);
+    CHECK_SNF("I64 plus flag", "+42", 3, sizeof out, "%+I64d", (long long)42);
+    CHECK_SNF("I32 plus negative keeps sign", "-7", 2, sizeof out, "%+I32d", (long)-7);
+    CHECK_SNF("I alt hex zero pad", "0x00000012", 10, sizeof out, "%#010I32x",
+              (unsigned long)0x12u);
+
+    /* The loader's crash line shape: %IX between a %d and a %p, so every
+     * argument is consumed exactly once and in order. This is the regression
+     * for the pre-fix bug where %IX printed literally and desynchronised the
+     * following arguments. (%p here already emits its own "0x" prefix, so the
+     * format does not add a second one.) */
+    CHECK_SNF("mixed IX does not consume the next argument",
+              "site[1] RVA=0x1234  patchAddr=0x5678  stolen=2", 46, sizeof out,
+              "site[%d] RVA=0x%IX  patchAddr=%p  stolen=%d",
+              1, (unsigned long long)0x1234u, (void*)0x5678, 2);
+    CHECK_SNF("mixed I32X does not consume the next argument",
+              "0x1234 -7 0x42", 14, sizeof out, "0x%I32X %d 0x%IX",
+              (unsigned long)0x1234u, -7, (unsigned long long)0x42u);
+}
+
+#pragma GCC diagnostic pop
+
 static void test_pointers(void)
 {
     CHECK_SNF("p NULL", "0", 1, sizeof out, "%p", (void*)0);
@@ -409,6 +481,42 @@ static void test_vsnprintf(void)
     CHECK_VSNF("vsnprintf mixed", "x=-7 s=hi", 9, sizeof out, "x=%d s=%s", -7, "hi");
     CHECK_VSNF("vsnprintf truncation", "12", 5, 3, "%d", 12345);
 }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat"
+
+/* _snprintf is the MSVC spelling the loader's crash writer calls. The shim
+ * returns the would-be length (the caller clamps it) and always terminates. */
+static void test_snprintf_msvc(void)
+{
+    {
+        char buffer[64];
+        int got;
+        buffer[0] = (char)0x5A;
+        got = _snprintf(buffer, sizeof buffer, "%IX", (unsigned long long)0xDEADBEEFu);
+        report(got == 8 && same_text(buffer, "DEADBEEF"),
+               "_snprintf formats the loader's %IX");
+    }
+    {
+        char buffer[6];
+        int got;
+        size_t i;
+        for (i = 0; i < sizeof buffer; i++) buffer[i] = (char)0x5A;
+        got = _snprintf(buffer, sizeof buffer, "0x%IX", (unsigned long long)0xDEADBEEFu);
+        report(got == 10 && same_text(buffer, "0xDEA"),
+               "_snprintf truncates %IX and NUL-terminates");
+    }
+    {
+        char buffer[64];
+        int got;
+        got = _snprintf(buffer, sizeof buffer, "site[%d] RVA=0x%IX", 2,
+                        (unsigned long long)0xBEEFu);
+        report(got == 18 && same_text(buffer, "site[2] RVA=0xBEEF"),
+               "_snprintf mixed %%d then %%IX consumes both arguments");
+    }
+}
+
+#pragma GCC diagnostic pop
 
 static void test_snwprintf(void)
 {
@@ -630,11 +738,13 @@ static void test_heap(void)
 static void run_tests(void)
 {
     test_integers();
+    test_i_length_modifier();
     test_pointers();
     test_strings();
     test_width_precision_and_truncation();
     test_floats();
     test_vsnprintf();
+    test_snprintf_msvc();
     test_snwprintf();
     test_memory();
     test_string_helpers();

@@ -5,6 +5,7 @@ rem
 rem     install.bat -DryRun
 rem     install.bat -Uninstall
 rem     install.bat -GameDir "D:\Games\Mewgenics"
+rem     install.bat -BundledLoader
 setlocal
 cd /d "%~dp0"
 

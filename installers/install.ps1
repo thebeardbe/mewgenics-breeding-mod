@@ -20,8 +20,16 @@
     harmless. Any file that would be replaced is first copied beside itself
     with a timestamp.
 
+    The installer prefers the official Mewjector loader once it carries our
+    startup-hang fix, and falls back to the patched loader in this bundle
+    otherwise. It prints which one it used; see PATCHES.md.
+
 .PARAMETER GameDir
     Game folder override for non-standard setups.
+
+.PARAMETER BundledLoader
+    Always use the patched loader shipped in this bundle, even if the official
+    Mewjector release already carries our fix.
 
 .PARAMETER DryRun
     Report what would happen and change nothing.
@@ -41,7 +49,8 @@
 param(
     [string]$GameDir,
     [switch]$DryRun,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$BundledLoader
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,6 +71,24 @@ $Script:Artifacts = @(
 # Install record written after a successful install. One target path per line,
 # relative to the game folder. Uninstall only touches what this file lists.
 $Script:ManifestRel = 'mods\.breeding-spike-installed'
+
+# Choosing between the bundled patched loader and the official upstream one
+# lives in its own file to keep this script small.
+$Script:LoaderReleaseScript = Join-Path $Script:SourceDir 'loader-release.ps1'
+if (-not (Test-Path -LiteralPath $Script:LoaderReleaseScript -PathType Leaf)) {
+    throw 'loader-release.ps1 is missing beside install.ps1; unpack the whole release folder.'
+}
+. $Script:LoaderReleaseScript
+
+function Get-ArtifactSource {
+    param([Parameter(Mandatory)][string]$Name)
+    # The loader files may come from a downloaded upstream release; everything
+    # else always comes from the unpacked bundle.
+    if ($Name -eq 'version.dll' -or $Name -eq 'chainloader.ini') {
+        return (Join-Path (Get-LoaderSourceDir) $Name)
+    }
+    return (Join-Path $Script:SourceDir $Name)
+}
 
 function Write-Ok   { param([string]$Message) Write-Host "  ok   $Message" -ForegroundColor Green }
 function Write-Info { param([string]$Message) Write-Host "       $Message" }
@@ -227,7 +254,7 @@ function Write-InstallManifest {
     # failed install never claims a file it did not write.
     $records = New-Object System.Collections.Generic.List[string]
     foreach ($artifact in $Script:Artifacts) {
-        $source = Join-Path $Script:SourceDir $artifact.Source
+        $source = Get-ArtifactSource -Name $artifact.Source
         $target = Join-Path $RootDir $artifact.Target
         if (Test-SameContent -Source $source -Target $target) {
             $records.Add(($artifact.Target -replace '\\', '/'))
@@ -280,7 +307,7 @@ function Invoke-Install {
     $backed = 0
 
     foreach ($artifact in $Script:Artifacts) {
-        $source = Join-Path $Script:SourceDir $artifact.Source
+        $source = Get-ArtifactSource -Name $artifact.Source
         $target = Join-Path $RootDir $artifact.Target
         $targetDir = Split-Path -Parent $target
 
@@ -481,14 +508,21 @@ try {
     if ($Uninstall) {
         Invoke-Uninstall -RootDir $root
     } else {
+        Select-Loader
         Invoke-Install -RootDir $root
     }
 
     Write-Host ''
+    if ($Script:LoaderSelected) {
+        Write-Info "loader: $(Get-LoaderSummary)"
+        Show-LoaderProvenance -Installed (Join-Path $root 'version.dll')
+    }
     Write-Host '*** ACHIEVEMENTS STAY ON: nothing here passes -modpaths or enables the debug console, the only two things the game checks before it disables Steam achievements. ***' -ForegroundColor Green
     exit 0
 } catch {
     Write-Host ''
     Write-Fail $_.Exception.Message
     exit 1
+} finally {
+    Remove-LoaderScratch
 }

@@ -7,7 +7,9 @@
  * Mewgenics at launch under Proton (see build.sh rule 2). MewUI
  * (vendor/upstream/mewui/src/native/mew_ui_api.c) includes <string.h>,
  * <stdio.h>, <stdarg.h> and <stdlib.h> and calls the functions below, so we
- * provide them here. This is not a general CRT and must not grow into one.
+ * provide them here. The patched Mewjector loader build links this file too;
+ * src/loader_crt.c adds the file-I/O functions it needs. This is not a general
+ * CRT and must not grow into one.
  *
  * This file holds the memory, string and heap half:
  *   mem*  — hand-written copies/compares; MewUI uses memset/memcpy/memcmp.
@@ -41,6 +43,35 @@ void* memcpy(void* destination, const void* source, size_t count)
     while (count-- != 0)
     {
         *out++ = *in++;
+    }
+    return destination;
+}
+
+void* memmove(void* destination, const void* source, size_t count)
+{
+    unsigned char* out = (unsigned char*)destination;
+    const volatile unsigned char* in = (const volatile unsigned char*)source;
+    if (out == in || count == 0)
+    {
+        return destination;
+    }
+    /* Copy backwards when the regions overlap with the source above the
+     * destination, so a forward copy cannot clobber the source. */
+    if (out < in)
+    {
+        while (count-- != 0)
+        {
+            *out++ = *in++;
+        }
+    }
+    else
+    {
+        out += count;
+        in += count;
+        while (count-- != 0)
+        {
+            *--out = *--in;
+        }
     }
     return destination;
 }
@@ -107,6 +138,46 @@ char* strncpy(char* destination, const char* source, size_t count)
         destination[i++] = '\0';
     }
     return destination;
+}
+
+char* strcpy(char* destination, const char* source)
+{
+    char* out = destination;
+    while ((*out++ = *source++) != '\0')
+    {
+    }
+    return destination;
+}
+
+char* strcat(char* destination, const char* source)
+{
+    char* out = destination;
+    while (*out != '\0')
+    {
+        out++;
+    }
+    while ((*out++ = *source++) != '\0')
+    {
+    }
+    return destination;
+}
+
+char* strrchr(const char* text, int character)
+{
+    const char* found = NULL;
+    char needle = (char)character;
+    if (!text)
+    {
+        return NULL;
+    }
+    do
+    {
+        if (*text == needle)
+        {
+            found = text;
+        }
+    } while (*text++ != '\0');
+    return (char*)found;
 }
 
 size_t wcslen(const wchar_t* text)

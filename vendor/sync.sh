@@ -10,9 +10,11 @@
 #   mewjector        version.dll proxy + MJ_* mod API  (githubuser508)
 #   mewgenics-ui-api MewUI scene/button/text helpers   (Pseudonym-Tim)
 #
-# The official Mewjector release `version.dll` is used as the shipped loader:
-# it links its CRT statically and imports only KERNEL32.dll. A zig/mingw build of
-# the same source imports api-ms-win-crt-* and fails to load under Proton.
+# The official Mewjector release `version.dll` is kept as a reference and for
+# the plain `./build.sh loader` build: it links its CRT statically and imports
+# only KERNEL32.dll. The shipped loader is the patched build, produced from the
+# same source with src/crt_shim.c / src/loader_crt.c and -nostdlib, because a
+# plain zig/mingw build imports api-ms-win-crt-* and fails to load under Proton.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

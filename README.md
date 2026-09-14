@@ -17,7 +17,7 @@ game internals we have reversed, the RVAs, and the open questions.
 | Claim | Evidence |
 |---|---|
 | Mewjector loads a mod DLL and the v3 API answers | `tools/smoke/run_smoke.sh` passes under Wine 11 |
-| Our build toolchain works | `zig cc -target x86_64-windows-gnu -fms-extensions` builds the mod; the shipped loader is the official Mewjector release |
+| Our build toolchain works | `zig cc -target x86_64-windows-gnu -fms-extensions` builds the mod; the bundled loader is built from the patched Mewjector source the same CRT-free way |
 | Shipped DLLs import only `KERNEL32.dll` | checked with `objdump -p`; a UCRT-importing (`api-ms-win-crt-*`) build crashes the game at launch under Proton |
 | MewUI's RVAs match this game build | `mewgenics-ui-api`'s resolver matches every symbol against build `25143593` |
 | The overlay's `db_key` is the game's cat key | `MewSaveFile::Load` stores its `__int64` key into `CatData.sqlKey` at RVA `0x230101`; confirmed in-game: 18/18 logged cats matched the overlay's save parse |
@@ -40,6 +40,7 @@ src/bridge_client.c   CRT-free Winsock sender: focus requests to the overlay
 src/shortcut_watcher.c always-on Ctrl+Shift+B watcher: raise the overlay in any mode
 src/crt_shim.c        KERNEL32-only mem/str/heap replacements for MewUI's CRT calls
 src/crt_format.c      the snprintf/vsnprintf/_snwprintf half of that shim
+src/loader_crt.c      file-I/O and _stricmp half, for the patched loader's CRT-free build
 tools/smoke/          Wine tests for the loader pipeline and the sender
 installers/           one-click installers and uninstallers (Windows, plus
                       Linux/Proton)
@@ -73,9 +74,11 @@ shell with Wine available), packs the installer bundle, and publishes it on the
 [releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
 
 That bundle is `MewgenicsBreedingMod-install-vX.Y.Z.zip`: the three files from
-`dist/`, plus everything in `installers/` (both installers, both uninstallers,
-`proton-registry.sh`, and the install README), flat in one folder. Pushes and
-pull requests to `master` run the same build, but only a tag creates a release.
+`dist/` (including the patched loader), plus everything in `installers/` (both
+installers, both uninstallers, `proton-registry.sh`, `loader-release.sh`,
+`PATCHES.md`, the Mewjector licence, and the install README), flat in one
+folder. Pushes and pull requests to `master` run the same build, but only a tag
+creates a release.
 
 A shell check is any executable shell script under a `tests/` directory; CI
 discovers and runs all of them with the cross-compiler and Wine available, so a
@@ -97,9 +100,11 @@ checks `mod_logs/chainloader.log`.
   is not optional. With `version=n` alone, Wine forces our 64-bit DLL on every
   process in the prefix, 32-bit processes cannot load it and die, and the game
   launch aborts silently with no log.
-- We ship the official Mewjector release as the loader and build our mod DLLs
-  CRT-free (importing only `KERNEL32.dll`) as a precaution, but neither was what
-  fixed the crash. See `RESEARCH.md` for the corrected account.
+- The loader that fixed the intermittent startup hang is a patched Mewjector
+  (`EnableEPFallback` plus honouring `Logging=0`, PR #6), which is not upstream
+  yet; the bundle ships that patched build as its fallback. Both it and our mod
+  DLL import only `KERNEL32.dll`, so nothing under Proton pulls in a UCRT. See
+  `RESEARCH.md` and `installers/PATCHES.md`.
 
 ## Install
 
@@ -111,8 +116,25 @@ systems, flat in one folder, with the install steps in the bundle's
 it on the
 [releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
 None is published yet, so until one is you can build the same zip yourself:
-`./build.sh`, then pack the contents of `installers/` together with the three
-files from `dist/`.
+`./build.sh --patched`, then pack the contents of `installers/` together with
+the three files from `dist/`.
+
+### The loader
+
+`version.dll` is [Mewjector](https://github.com/githubuser508/mewjector), the
+loader that reads `chainloader.ini` and loads the mods. The official Mewjector
+v3.4 loader hangs on some Proton/Wine launches, so this bundle ships a patched
+build with the fix from
+[Mewjector PR #6](https://github.com/githubuser508/mewjector/pull/6). That fix
+has not landed upstream yet.
+
+The installer checks the latest official Mewjector release first. If its
+`chainloader.ini` already contains `EnableEPFallback`, the installer downloads
+that release and uses its loader and ini; otherwise it uses the patched loader
+in this bundle. Either way it prints which loader it used and the reason, next
+to the achievements line. Pass `--bundled-loader` (`install.sh`) or
+`-BundledLoader` (`install.bat -BundledLoader`) to always use the bundled
+patched loader. All of this is in `PATCHES.md` in the bundle.
 
 ### Windows
 

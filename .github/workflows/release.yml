@@ -55,12 +55,12 @@ jobs:
           github_access_token: ${{ github.token }}
 
       - name: Build through the pinned dev shell
-        run: nix develop --command ./build.sh
+        run: nix develop --command ./build.sh --patched
 
       - name: Both DLLs import only KERNEL32
         run: |
           nix develop --command bash -euo pipefail - <<'BASH'
-          # Our mod DLL and the official Mewjector loader must import KERNEL32
+          # Our mod DLL and the patched Mewjector loader must import KERNEL32
           # only. A zig/mingw build that pulls in api-ms-win-crt-* loads under
           # Wine but crashes the game at launch under Proton, so a stray import
           # is a release blocker, not a warning.
@@ -153,6 +153,18 @@ jobs:
           exit "$status"
           BASH
 
+      - name: The bundle carries the patched loader
+        run: |
+          set -euo pipefail
+          # The build step builds the patched loader, but the shell checks run
+          # in between. Refuse to bundle if dist/ no longer carries the patch,
+          # so a check that rebuilds the default loader cannot ship it.
+          if ! grep -q '^EnableEPFallback=' dist/chainloader.ini; then
+            echo "::error::dist/chainloader.ini lacks EnableEPFallback; refusing to bundle the unpatched loader"
+            exit 1
+          fi
+          echo "dist/chainloader.ini carries EnableEPFallback"
+
       - name: Assemble the installer bundle
         run: |
           set -euo pipefail
@@ -163,11 +175,15 @@ jobs:
           rm -rf release-bundle "$bundle"
           mkdir -p release-bundle
           # Everything flat in one folder: the three build artifacts, then the
-          # installers (installers/README.md becomes README.md here). A flat
-          # name cannot also hold the root README, which is developer-facing and
-          # links to files that are not in the bundle, so it is not shipped.
+          # installers (installers/README.md becomes README.md here), plus the
+          # vendored Mewjector licence and the patch note. A flat name cannot
+          # also hold the root README, which is developer-facing and links to
+          # files that are not in the bundle, so it is not shipped.
           cp dist/version.dll dist/chainloader.ini dist/BreedingSpike.dll release-bundle/
           cp installers/* release-bundle/
+          # Refresh the licence from the vendored source, so the shipped text
+          # always matches the revision the patched loader was built from.
+          cp vendor/upstream/mewjector/LICENSE release-bundle/MEWJECTOR-LICENSE.txt
           (cd release-bundle && zip -X -q "../$bundle" ./*)
           echo "Bundle: $bundle"
           ls -l "$bundle"
@@ -207,11 +223,18 @@ jobs:
 
             It contains, flat in one folder:
 
-            - `version.dll` and `chainloader.ini`: the official Mewjector v3.4 loader
+            - `version.dll` and `chainloader.ini`: the Mewjector loader, patched with the startup-hang fix (PR #6) until it lands upstream
             - `BreedingSpike.dll`: the mod
+            - `PATCHES.md`: what the loader patch changes and why
+            - `MEWJECTOR-LICENSE.txt`: Mewjector's MIT licence
             - `install.bat`, `install.ps1`, `uninstall.bat`: the Windows installer and uninstaller
-            - `install.sh`, `uninstall.sh`, `proton-registry.sh`: the Linux / Proton installer and uninstaller
+            - `install.sh`, `uninstall.sh`, `proton-registry.sh`, `loader-release.sh`: the Linux / Proton installer and uninstaller
             - `README.md`: the install steps for both systems
+
+            The installer checks the latest official Mewjector release first
+            and prefers it once it carries the fix; otherwise it uses the
+            patched loader in this bundle. Either way it prints which one it
+            used.
 
             Unpack the zip anywhere, keep the folder together, and follow
             `README.md` inside it. The same steps are in the repository's

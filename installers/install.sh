@@ -5,11 +5,16 @@
 #   ./install.sh --dry-run        report what would happen, change nothing
 #   ./install.sh --uninstall      remove files this script installed, restore backups
 #   ./install.sh --game-dir DIR   override the game folder
+#   ./install.sh --bundled-loader force the loader built into this bundle
 #
 # Set MEWGENICS_DIR instead of --game-dir if you prefer that. The three
 # artifacts must sit beside this script: version.dll, chainloader.ini,
 # BreedingSpike.dll. The loader is a native proxy that shadows the system
 # version.dll by living next to the game exe; the mod DLL goes into mods/.
+#
+# The installer prefers the official Mewjector loader once it carries our
+# startup-hang fix; see loader-release.sh and PATCHES.md. --bundled-loader
+# skips that check.
 #
 # Achievements stay ON: nothing here passes -modpaths or enables the debug
 # console, the only two things the game checks before it disables them.
@@ -34,16 +39,19 @@ MEWGENICS_APPID=686060
 
 DRY_RUN=0
 UNINSTALL=0
+BUNDLED_LOADER=0
 GAME_DIR="${MEWGENICS_DIR:-}"
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--dry-run] [--uninstall] [--game-dir DIR]
+Usage: install.sh [--dry-run] [--uninstall] [--game-dir DIR] [--bundled-loader]
 
   (no flags)         install the mod into the Mewgenics game folder
   --dry-run          report what would happen and change nothing
   --uninstall        remove the files this script installed and restore backups
   --game-dir DIR     use DIR as the game folder (overrides MEWGENICS_DIR)
+  --bundled-loader   always use the loader shipped in this bundle, even if the
+                     official Mewjector release already carries our fix
   -h, --help         show this help
 EOF
 }
@@ -61,10 +69,19 @@ if [ ! -f "$SCRIPT_DIR/proton-registry.sh" ]; then
 fi
 . "$SCRIPT_DIR/proton-registry.sh"
 
+# Deciding between the bundled patched loader and the official upstream one
+# lives in its own file too, for the same reason.
+if [ ! -f "$SCRIPT_DIR/loader-release.sh" ]; then
+  die "loader-release.sh is missing from $SCRIPT_DIR"
+fi
+. "$SCRIPT_DIR/loader-release.sh"
+trap loader_release_cleanup EXIT
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)   DRY_RUN=1 ;;
     --uninstall) UNINSTALL=1 ;;
+    --bundled-loader) BUNDLED_LOADER=1 ;;
     --game-dir)
       [ "$#" -ge 2 ] || die "--game-dir needs a folder"
       GAME_DIR="$2"
@@ -252,7 +269,7 @@ write_manifest() {
   local -a records=()
   for entry in "${TARGETS[@]}"; do
     rel="${entry#*:}"
-    if same_content "$SCRIPT_DIR/${entry%%:*}" "$game_dir/$rel"; then
+    if same_content "$(loader_source_path "${entry%%:*}")" "$game_dir/$rel"; then
       records+=("$rel")
     fi
   done
@@ -283,7 +300,7 @@ do_install() {
   local written=0 current=0 backed=0
 
   for entry in "${TARGETS[@]}"; do
-    src="$SCRIPT_DIR/${entry%%:*}"
+    src="$(loader_source_path "${entry%%:*}")"
     rel="${entry#*:}"
     dst="$game_dir/$rel"
     dst_dir="$(dirname "$dst")"
@@ -471,6 +488,7 @@ main() {
   if [ "$UNINSTALL" = 1 ]; then
     do_uninstall "$game_dir"
   else
+    select_loader
     do_install "$game_dir"
     printf '\n'
     print_launch_option
@@ -483,6 +501,10 @@ main() {
   fi
 
   printf '\n'
+  if [ "$LOADER_SELECTED" = 1 ]; then
+    info "loader: $(loader_summary)"
+    loader_provenance "$game_dir/version.dll"
+  fi
   printf '*** ACHIEVEMENTS STAY ON: nothing here passes -modpaths or enables the debug console, the only two things the game checks before it disables Steam achievements. ***\n'
 }
 

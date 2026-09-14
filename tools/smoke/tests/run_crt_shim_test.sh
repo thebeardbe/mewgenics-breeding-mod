@@ -102,4 +102,48 @@ if ! grep -aq "\[CrtShimTest\] DONE pass=[0-9]* fail=0" "$log"; then
   exit 1
 fi
 
+# The loader shipped in the bundle is the one built here from source plus our
+# patch, not the official release. Point the same harness at it: a mod that the
+# official loader hosts must also load, log and run under the patched build. The
+# %IX formatting itself is covered by the shim unit cases above; this proves
+# the patched loader still drives the whole pipeline end to end.
+echo "==> building the patched loader and driving it end to end"
+./build.sh loader --patched >/dev/null
+check_kernel32_only dist/version.dll
+
+patched_run="$RUN/patched"
+rm -rf "$patched_run"
+mkdir -p "$patched_run/mods"
+cp dist/version.dll "$patched_run/version.dll"
+cp dist/chainloader.ini "$patched_run/chainloader.ini"
+cp "$RUN/mods/CrtShimTest.dll" "$patched_run/mods/CrtShimTest.dll"
+cp "$RUN/wintest.exe" "$patched_run/wintest.exe"
+(
+  cd "$patched_run"
+  export WINEPREFIX="$PREFIX" WINEDEBUG=-all
+  export WINEDLLOVERRIDES="version=n,b;mscoree,mshtml="
+  timeout 240 wine wintest.exe >/dev/null 2>&1 || true
+  timeout 30 wineserver -k >/dev/null 2>&1 || true
+)
+
+patched_log="$patched_run/mod_logs/chainloader.log"
+if [ ! -f "$patched_log" ]; then
+  echo "FAIL: the patched loader produced no chainloader.log" >&2
+  exit 1
+fi
+
+echo "==> chainloader.log (patched loader, CrtShimTest lines)"
+grep -a "CrtShimTest" "$patched_log" || true
+echo
+
+if grep -aq "\[CrtShimTest\] FAIL" "$patched_log"; then
+  echo "FAIL: the patched loader run had one or more shim test failures" >&2
+  exit 1
+fi
+if ! grep -aq "\[CrtShimTest\] DONE pass=[0-9]* fail=0" "$patched_log"; then
+  echo "FAIL: the patched loader run did not finish cleanly" >&2
+  exit 1
+fi
+echo "OK: the patched loader built from source drives the same mod end to end"
+
 echo "PASS: CRT shim tests all green"

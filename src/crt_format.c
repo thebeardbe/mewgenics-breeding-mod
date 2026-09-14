@@ -8,7 +8,11 @@
  * Coverage: the specifiers MewUI actually passes (%s %c %d %i %u %x %X %o %p
  * %zu %llu %f and %%), the usual flags, width and precision (including the
  * "%.3f" in MewUI's seek/audio log line and the "%.Nf" its typed-text path
- * builds with _snwprintf), plus the length modifiers hh/h/l/ll/z/j/t/L.
+ * builds with _snwprintf), plus the length modifiers hh/h/l/ll/z/j/t/L and
+ * MSVC's I size_t modifier (%I, %I32, %I64). The I forms matter because the
+ * patched Mewjector loader's log and crash lines use %IX for pointer-sized
+ * values; without them the specifier is copied literally and its argument is
+ * never consumed, so every later argument reads the wrong one.
  * `%e`/`%g`/`%a` are accepted but rendered as fixed-point, which is all MewUI
  * asks for. The float path is exact for |v| below 2^64 / 10^precision and
  * falls back to direct integer-digit extraction above that, so it never
@@ -539,6 +543,27 @@ static int MewCrtVFormatNarrow(char* buffer, size_t size, const char* format, va
             length = 8;
             format++;
         }
+        else if (*format == 'I')
+        {
+            /* MSVC's size_t/pointer length modifier: I64 (8 bytes), I32
+             * (4 bytes), or a bare I (size_t, pointer-sized). The bare form
+             * must consume exactly one argument like any other length. */
+            format++;
+            if (*format == '6' && format[1] == '4')
+            {
+                length = 8;
+                format += 2;
+            }
+            else if (*format == '3' && format[1] == '2')
+            {
+                length = 4;
+                format += 2;
+            }
+            else
+            {
+                length = (int)sizeof(size_t);
+            }
+        }
 
         conversion = *format;
         if (conversion == '\0')
@@ -637,6 +662,20 @@ static int MewCrtVFormatNarrow(char* buffer, size_t size, const char* format, va
 }
 
 int snprintf(char* buffer, size_t size, const char* format, ...)
+{
+    int result;
+    va_list args;
+
+    va_start(args, format);
+    result = MewCrtVFormatNarrow(buffer, size, format, args);
+    va_end(args);
+    return result;
+}
+
+/* MSVC spelling of snprintf, used by the Mewjector loader's crash writer.
+ * Returning the would-be length (rather than MSVC's -1) is safe: the caller
+ * clamps anything at or above the buffer size. */
+int _snprintf(char* buffer, size_t size, const char* format, ...)
 {
     int result;
     va_list args;
