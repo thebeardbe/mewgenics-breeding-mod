@@ -84,24 +84,57 @@ jobs:
           done
           BASH
 
-      - name: Run shell checks (if any)
+      - name: Run shell checks in tests/ (if any)
         run: |
           nix develop --command bash -euo pipefail - <<'BASH'
-          # Checks live wherever the repository puts them and are discovered by
-          # name, not listed here. A "check*.sh" script is run with bash and
-          # must exit non-zero to fail the build. Vendored, build, log, and
-          # scratch trees are skipped. With no checks present this step passes
-          # cleanly.
-          mapfile -t checks < <(
+          # The repository keeps its shell checks in "tests" directories and
+          # they are discovered, never listed here, so adding a check needs no
+          # workflow change. Each one runs with bash and must exit non-zero to
+          # fail the build. Vendored, build, log, and scratch trees are
+          # skipped at any depth (the prune applies before the match). With no
+          # checks present this step passes cleanly.
+          mapfile -t candidates < <(
             find . \
               \( -name .git -o -name dist -o -name vendor -o -name mod_logs \
                  -o -name .scratch \) -prune -o \
-              -type f -name 'check*.sh' -print | sort
+              -type f -perm -u+x -path '*/tests/*' -print | sort
           )
+
+          checks=()
+          for candidate in "${candidates[@]}"; do
+            # An executable file under tests/ is a check when it is named like
+            # a shell script or carries a shell shebang. Other executables
+            # (binaries, helpers for another runtime) are not run.
+            if [[ "$candidate" == *.sh || "$candidate" == *.bash ]]; then
+              checks+=("$candidate")
+              continue
+            fi
+            read -r shebang < "$candidate" || shebang=''
+            interpreter="${shebang#\#!}"
+            interpreter="${interpreter%% *}"
+            interpreter="${interpreter##*/}"
+            case "$interpreter" in
+              sh|bash|dash|ksh|zsh) checks+=("$candidate") ;;
+            esac
+          done
+
           if [ "${#checks[@]}" -eq 0 ]; then
-            echo "No check*.sh scripts found; skipping shell checks."
+            echo "No executable shell checks found in any tests/ directory; skipping."
             exit 0
           fi
+
+          # Some checks drive the PowerShell installers, so they need an
+          # interpreter. The runner ships pwsh on PATH; the checks invoke it as
+          # "$PWSH", so export the absolute path and they can run too. Without
+          # it the PowerShell-driven checks skip themselves.
+          if command -v pwsh >/dev/null 2>&1; then
+            PWSH="$(command -v pwsh)"
+            export PWSH
+            echo "pwsh on PATH: PWSH=$PWSH"
+          else
+            echo "pwsh not on PATH; PowerShell-driven checks will skip."
+          fi
+
           status=0
           for check in "${checks[@]}"; do
             echo "==> $check"
