@@ -3,8 +3,8 @@
 # bundled patched build, or the official loader from the latest upstream
 # release once it carries our startup-hang fix (PR #6).
 #
-# Sourced by install.sh; not run on its own. It uses that script's DRY_RUN and
-# its info/warn/die helpers.
+# Sourced by install.sh; not run on its own. It uses that script's DRY_RUN,
+# its payload_source_path resolver, and its info/warn/die helpers.
 #
 # Why the bundle ships a patched loader: the official Mewjector v3.4 loader
 # hangs on some Proton/Wine launches because it always installs its
@@ -327,8 +327,10 @@ loader_provenance() {
   fi
 }
 
-# Source path for a bundle artifact: the chosen release for the loader files,
-# the unpacked bundle for everything else.
+# Source path for a payload artifact: the chosen release for the loader files,
+# the unpacked bundle for everything else. The bundle lookup follows
+# payload_source_path in install.sh: a complete flat folder wins outright,
+# otherwise payload/ per file with the copy beside the script as fallback.
 loader_source_path() {
   local name="$1"
   case "$name" in
@@ -339,5 +341,5 @@ loader_source_path() {
       fi
       ;;
   esac
-  printf '%s/%s\n' "$SCRIPT_DIR" "$name"
+  payload_source_path "$name"
 }

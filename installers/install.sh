@@ -8,9 +8,10 @@
 #   ./install.sh --bundled-loader force the loader built into this bundle
 #
 # Set MEWGENICS_DIR instead of --game-dir if you prefer that. The three
-# artifacts must sit beside this script: version.dll, chainloader.ini,
-# BreedingSpike.dll. The loader is a native proxy that shadows the system
-# version.dll by living next to the game exe; the mod DLL goes into mods/.
+# artifacts (version.dll, chainloader.ini, BreedingSpike.dll) must sit in a
+# payload folder beside the script's folder, or beside this script. The loader is
+# a native proxy that shadows the system version.dll by living next to the game
+# exe; the mod DLL goes into mods/.
 #
 # The installer prefers the official Mewjector loader once it carries our
 # startup-hang fix; see loader-release.sh and PATCHES.md. --bundled-loader
@@ -22,7 +23,60 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source file beside this script -> path under the game folder. One list keeps
+# Where the three artifacts live. The release bundle keeps them in payload/, a
+# folder beside this script's own folder (windows/ or linux/); a flat unpack
+# keeps them beside the script. A complete flat folder is taken as a whole,
+# whatever else is nearby; an incomplete one falls back to a per-artifact
+# search, so a flat folder merely missing one file still finds the two it has.
+
+# The payload folder beside this script's own folder, when there is one. The
+# release bundle has it; a flat unpack does not.
+payload_dir() {
+  if [ -d "$SCRIPT_DIR/../payload" ]; then
+    printf '%s\n' "$SCRIPT_DIR/../payload"
+  fi
+}
+
+# True when every artifact sits beside the script: a complete self-contained
+# flat folder. That layout is what the user means to install, so it beats a
+# payload folder that happens to sit nearby.
+all_artifacts_beside_script() {
+  local entry
+  for entry in "${TARGETS[@]}"; do
+    [ -f "$SCRIPT_DIR/${entry%%:*}" ] || return 1
+  done
+  return 0
+}
+
+# Resolve one artifact. A complete flat folder wins outright. Otherwise prefer
+# the copy in the payload folder, so a release installs what it shipped even
+# when a stray copy of that artifact sits beside the script; fall back to the
+# copy beside the script when the payload folder has none. When the artifact is
+# nowhere, name the payload folder while that exists, otherwise the script
+# folder, so the caller's error never names a folder that is not there.
+payload_source_path() {
+  local name="$1" payload
+  if all_artifacts_beside_script; then
+    printf '%s/%s\n' "$SCRIPT_DIR" "$name"
+    return 0
+  fi
+  payload="$(payload_dir)"
+  if [ -n "$payload" ] && [ -f "$payload/$name" ]; then
+    printf '%s/%s\n' "$payload" "$name"
+    return 0
+  fi
+  if [ -f "$SCRIPT_DIR/$name" ]; then
+    printf '%s/%s\n' "$SCRIPT_DIR" "$name"
+    return 0
+  fi
+  if [ -n "$payload" ]; then
+    printf '%s/%s\n' "$payload" "$name"
+  else
+    printf '%s/%s\n' "$SCRIPT_DIR" "$name"
+  fi
+}
+
+# Source file in the payload -> path under the game folder. One list keeps
 # install, uninstall and the payload check in agreement.
 TARGETS=(
   "version.dll:version.dll"
@@ -278,14 +332,15 @@ write_manifest() {
 
 check_payload() {
   # Fail before touching the game folder when the bundle is incomplete.
-  local entry missing=()
+  local entry src missing=()
   for entry in "${TARGETS[@]}"; do
-    if [ ! -f "$SCRIPT_DIR/${entry%%:*}" ]; then
-      missing+=("$SCRIPT_DIR/${entry%%:*}")
+    src="$(payload_source_path "${entry%%:*}")"
+    if [ ! -f "$src" ]; then
+      missing+=("$src")
     fi
   done
   if [ "${#missing[@]}" -gt 0 ]; then
-    printf 'error: the installer payload is incomplete. These files must sit beside install.sh:\n' >&2
+    printf 'error: the installer payload is incomplete. These files must sit beside install.sh, or in a payload folder beside it:\n' >&2
     printf '       %s\n' "${missing[@]}" >&2
     die "unpack the whole release folder before running this"
   fi
@@ -384,7 +439,7 @@ do_uninstall() {
   for entry in "${TARGETS[@]}"; do
     rel="${entry#*:}"
     dst="$game_dir/$rel"
-    src="$SCRIPT_DIR/${entry%%:*}"
+    src="$(payload_source_path "${entry%%:*}")"
     dst_dir="$(dirname "$dst")"
     leaf="$(basename "$dst")"
 

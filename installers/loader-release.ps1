@@ -5,8 +5,8 @@
 # release once it carries our startup-hang fix (PR #6).
 #
 # Dot-sourced by install.ps1; not run on its own. It uses that script's
-# $DryRun / $BundledLoader switches, its $Script:SourceDir, and its Write-Info
-# / Write-Warn helpers.
+# $DryRun / $BundledLoader switches, its Get-ArtifactPath resolver, and its
+# Write-Info / Write-Warn helpers.
 #
 # Why the bundle ships a patched loader: the official Mewjector v3.4 loader
 # hangs on some Proton/Wine launches because it always installs its
@@ -237,10 +237,14 @@ function Show-LoaderProvenance {
     }
 }
 
-# Folder the loader files come from: the chosen release, or the bundle.
+# Folder a loader file comes from: the chosen release, or the location the
+# payload search reached in the bundle (see Get-ArtifactPath in install.ps1): a
+# complete flat folder wins outright, otherwise payload/ per file with the copy
+# beside the script as fallback.
 function Get-LoaderSourceDir {
+    param([Parameter(Mandatory)][string]$Name)
     if ($Script:LoaderKind -eq 'upstream' -and $Script:LoaderDir) {
         return $Script:LoaderDir
     }
-    return $Script:SourceDir
+    return (Split-Path -Parent (Get-ArtifactPath -Name $Name))
 }

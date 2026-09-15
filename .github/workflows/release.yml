@@ -178,18 +178,24 @@ jobs:
           # workspace root: the one file in the directory is the one uploaded,
           # whatever the ref made it be called.
           rm -rf release-bundle release-artifacts
-          mkdir -p release-bundle release-artifacts
-          # Everything flat in one folder: the three build artifacts, then the
-          # installers (installers/README.md becomes README.md here), plus the
-          # vendored Mewjector licence and the patch note. A flat name cannot
-          # also hold the root README, which is developer-facing and links to
-          # files that are not in the bundle, so it is not shipped.
-          cp dist/version.dll dist/chainloader.ini dist/BreedingSpike.dll release-bundle/
-          cp installers/* release-bundle/
+          mkdir -p release-bundle/payload release-bundle/windows release-bundle/linux release-artifacts
+          # One folder per platform, with the shared payload and the docs at the
+          # top: the three build artifacts in payload/, the Windows scripts in
+          # windows/, the Linux/Proton scripts in linux/, and the install README
+          # (installers/README.md becomes README.md here), PATCHES.md, and the
+          # vendored Mewjector licence at the root. Each script keeps its
+          # helpers beside it, so windows/ and linux/ each carry their own
+          # loader-release helper and linux/ carries proton-registry.sh. The
+          # root README is developer-facing and links to files that are not in
+          # the bundle, so it is not shipped.
+          cp dist/version.dll dist/chainloader.ini dist/BreedingSpike.dll release-bundle/payload/
+          cp installers/install.bat installers/install.ps1 installers/uninstall.bat installers/loader-release.ps1 release-bundle/windows/
+          cp installers/install.sh installers/uninstall.sh installers/loader-release.sh installers/proton-registry.sh release-bundle/linux/
+          cp installers/README.md installers/PATCHES.md release-bundle/
           # Refresh the licence from the vendored source, so the shipped text
           # always matches the revision the patched loader was built from.
           cp vendor/upstream/mewjector/LICENSE release-bundle/MEWJECTOR-LICENSE.txt
-          (cd release-bundle && zip -X -q "../release-artifacts/$bundle" ./*)
+          (cd release-bundle && zip -X -q -r "../release-artifacts/$bundle" ./*)
           echo "Bundle: release-artifacts/$bundle"
           ls -l "release-artifacts/$bundle"
 
@@ -235,15 +241,14 @@ jobs:
             The installer bundle is
             `MewgenicsBreedingMod-install-${{ github.ref_name }}.zip`.
 
-            It contains, flat in one folder:
+            It contains, split by platform:
 
-            - `version.dll` and `chainloader.ini`: the Mewjector loader, patched with the startup-hang fix (PR #6) until it lands upstream
-            - `BreedingSpike.dll`: the mod
+            - `payload/`: `version.dll` and `chainloader.ini` (the Mewjector loader, patched with the startup-hang fix, PR #6, until it lands upstream) and `BreedingSpike.dll` (the mod)
+            - `windows/`: `install.bat`, `install.ps1`, `uninstall.bat`, `loader-release.ps1`
+            - `linux/`: `install.sh`, `uninstall.sh`, `proton-registry.sh`, `loader-release.sh`
+            - `README.md`: the install steps for both systems
             - `PATCHES.md`: what the loader patch changes and why
             - `MEWJECTOR-LICENSE.txt`: Mewjector's MIT licence
-            - `install.bat`, `install.ps1`, `uninstall.bat`: the Windows installer and uninstaller
-            - `install.sh`, `uninstall.sh`, `proton-registry.sh`, `loader-release.sh`: the Linux / Proton installer and uninstaller
-            - `README.md`: the install steps for both systems
 
             The installer checks the latest official Mewjector release first
             and prefers it once it carries the fix; otherwise it uses the

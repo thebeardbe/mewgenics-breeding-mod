@@ -4,7 +4,7 @@
     One-click installer for the Mewgenics Breeding mod (standalone, Windows).
 
 .DESCRIPTION
-    Copies the three artifacts that sit beside this script into the Mewgenics
+    Copies the three artifacts from the bundle payload into the Mewgenics
     game folder:
 
         version.dll        -> <game>\version.dll        (Mewjector loader)
@@ -56,9 +56,57 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# The bundle is meant to be unpacked whole, so the artifacts live next to the
-# script. $PSScriptRoot is empty only for an interactive dot-source.
+# The bundle is meant to be unpacked whole. $PSScriptRoot holds this script and
+# its helpers; the payload may sit beside it or in ..\payload. $PSScriptRoot is
+# empty only for an interactive dot-source.
 $Script:SourceDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+
+# Where the three artifacts live. The release bundle keeps them in payload/, a
+# folder beside this script's own folder (windows/ or linux/); a flat unpack
+# keeps them beside the script. A complete flat folder is taken as a whole,
+# whatever else is nearby; an incomplete one falls back to a per-artifact
+# search, so a flat folder merely missing one file still finds the two it has.
+
+function Get-PayloadDir {
+    # The payload folder beside this script's own folder, when there is one.
+    # The release bundle has it; a flat unpack does not.
+    $payloadDir = Join-Path $Script:SourceDir '..\payload'
+    if (Test-Path -LiteralPath $payloadDir -PathType Container) { return $payloadDir }
+    return $null
+}
+
+function Test-AllArtifactsBesideScript {
+    # True when every artifact sits beside the script: a complete
+    # self-contained flat folder. That layout is what the user means to
+    # install, so it beats a payload folder that happens to sit nearby.
+    foreach ($artifact in $Script:Artifacts) {
+        $beside = Join-Path $Script:SourceDir $artifact.Source
+        if (-not (Test-Path -LiteralPath $beside -PathType Leaf)) { return $false }
+    }
+    return $true
+}
+
+function Get-ArtifactPath {
+    param([Parameter(Mandatory)][string]$Name)
+    # A complete flat folder wins outright. Otherwise resolve this artifact in
+    # the payload folder first, so a release installs what it shipped even when
+    # a stray copy of it sits beside the script; fall back to the copy beside
+    # the script when the payload folder has none. When the artifact is
+    # nowhere, name the payload folder while that exists, otherwise the script
+    # folder, so the caller's error never names a folder that is not there.
+    if (Test-AllArtifactsBesideScript) {
+        return (Join-Path $Script:SourceDir $Name)
+    }
+    $payloadDir = Get-PayloadDir
+    if ($payloadDir) {
+        $candidate = Join-Path $payloadDir $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    $beside = Join-Path $Script:SourceDir $Name
+    if (Test-Path -LiteralPath $beside -PathType Leaf) { return $beside }
+    if ($payloadDir) { return (Join-Path $payloadDir $Name) }
+    return $beside
+}
 
 # Source file in the bundle -> path under the game folder. One list keeps
 # install, uninstall and the payload check in agreement.
@@ -82,12 +130,13 @@ if (-not (Test-Path -LiteralPath $Script:LoaderReleaseScript -PathType Leaf)) {
 
 function Get-ArtifactSource {
     param([Parameter(Mandatory)][string]$Name)
-    # The loader files may come from a downloaded upstream release; everything
-    # else always comes from the unpacked bundle.
+    # The loader files may come from a downloaded upstream release; the bundle
+    # itself resolves every artifact on its own, beside the script or in
+    # payload\ (see Get-ArtifactPath).
     if ($Name -eq 'version.dll' -or $Name -eq 'chainloader.ini') {
-        return (Join-Path (Get-LoaderSourceDir) $Name)
+        return (Join-Path (Get-LoaderSourceDir -Name $Name) $Name)
     }
-    return (Join-Path $Script:SourceDir $Name)
+    return (Get-ArtifactPath -Name $Name)
 }
 
 function Write-Ok   { param([string]$Message) Write-Host "  ok   $Message" -ForegroundColor Green }
@@ -280,11 +329,11 @@ function Assert-Payload {
     # Fail before touching the game folder when the bundle is incomplete.
     $missing = @()
     foreach ($artifact in $Script:Artifacts) {
-        $source = Join-Path $Script:SourceDir $artifact.Source
+        $source = Get-ArtifactPath -Name $artifact.Source
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { $missing += $source }
     }
     if ($missing.Count -gt 0) {
-        Write-Fail 'the installer payload is incomplete. These files must sit beside install.ps1:'
+        Write-Fail 'the installer payload is incomplete. These files must sit beside install.ps1, or in a payload folder beside it:'
         foreach ($path in $missing) { Write-Info $path }
         throw 'unpack the whole release folder before running this'
     }
@@ -392,7 +441,7 @@ function Invoke-Uninstall {
 
     foreach ($artifact in $Script:Artifacts) {
         $target = Join-Path $RootDir $artifact.Target
-        $source = Join-Path $Script:SourceDir $artifact.Source
+        $source = Get-ArtifactSource -Name $artifact.Source
         $targetDir = Split-Path -Parent $target
         $leaf = Split-Path -Leaf $target
 

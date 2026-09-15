@@ -73,12 +73,12 @@ imports anything but `KERNEL32.dll`, runs the shell checks the repository ships
 shell with Wine available), packs the installer bundle, and publishes it on the
 [releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
 
-That bundle is `MewgenicsBreedingMod-install-vX.Y.Z.zip`: the three files from
-`dist/` (including the patched loader), plus everything in `installers/` (both
-installers, both uninstallers, `proton-registry.sh`, `loader-release.sh`,
-`PATCHES.md`, the Mewjector licence, and the install README), flat in one
-folder. Pushes and pull requests to `master` run the same build, but only a tag
-creates a release.
+That bundle is `MewgenicsBreedingMod-install-vX.Y.Z.zip`. It puts the three
+files from `dist/` (including the patched loader) in `payload/`, the Windows
+scripts in `windows/`, the Linux/Proton scripts in `linux/`, and `README.md`
+(the install guide), `PATCHES.md`, and the Mewjector licence at the top. Each
+script keeps its helpers beside it. Pushes and pull requests to `master` run the
+same build, but only a tag creates a release.
 
 A shell check is any executable shell script under a `tests/` directory; CI
 discovers and runs all of them with the cross-compiler and Wine available, so a
@@ -110,14 +110,14 @@ checks `mod_logs/chainloader.log`.
 
 The mod ships as `MewgenicsBreedingMod-install-vX.Y.Z.zip` (tagged releases;
 see [Release](#release)). It holds the three mod files (`version.dll`,
-`chainloader.ini`, `BreedingSpike.dll`) and the installer scripts for both
-systems, flat in one folder, with the install steps in the bundle's
+`chainloader.ini`, `BreedingSpike.dll`) in `payload/`, a `windows/` and a
+`linux/` folder for the two installers, and the install steps in the bundle's
 `README.md`. Unpack it anywhere and keep the folder together. Releases publish
 it on the
 [releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
 None is published yet, so until one is you can build the same zip yourself:
-`./build.sh --patched`, then pack the contents of `installers/` together with
-the three files from `dist/`.
+`./build.sh --patched`, then lay out the three files from `dist/` and the
+installers as the [release workflow](.github/workflows/release.yml) does.
 
 ### The loader
 
