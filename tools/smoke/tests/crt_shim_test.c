@@ -10,8 +10,9 @@
  * Build and run: tools/smoke/tests/run_crt_shim_test.sh (needs wine64).
  *
  * The test float/format expectations follow the MSVC semantics the mod needs
- * at runtime: snprintf returns the would-be length, %p is "0x" + lowercase
- * hex with "0" for NULL, and _snwprintf returns -1 on truncation while still
+ * at runtime: snprintf returns the would-be length, %p is upper-case hex with
+ * no "0x" prefix, zero-padded to the pointer width (16 digits on x64) and all
+ * zeros for NULL, and _snwprintf returns -1 on truncation while still
  * NUL-terminating. They are not glibc semantics (which uses %a/%e and round
  * half to even) because the shim stands in for the Windows CRT.
  */
@@ -72,6 +73,31 @@ static int same_wide(const wchar_t* left, const wchar_t* right)
         i++;
     }
     return left[i] == L'\0' && right[i] == L'\0';
+}
+
+/* Count non-overlapping occurrences of a literal, for the crash-line shape
+ * check. Hand-written like same_text: it must not lean on the shim's strstr. */
+static int count_text(const char* haystack, const char* needle)
+{
+    size_t needle_length = 0;
+    int count = 0;
+
+    while (needle[needle_length] != '\0') needle_length++;
+    while (*haystack != '\0')
+    {
+        size_t i = 0;
+        while (i < needle_length && haystack[i] == needle[i]) i++;
+        if (needle_length != 0 && i == needle_length)
+        {
+            count++;
+            haystack += needle_length;
+        }
+        else
+        {
+            haystack++;
+        }
+    }
+    return count;
 }
 
 /* NULL through a function so -Wnonnull does not fire on the literal; the shim
@@ -305,11 +331,12 @@ static void test_i_length_modifier(void)
     /* The loader's crash line shape: %IX between a %d and a %p, so every
      * argument is consumed exactly once and in order. This is the regression
      * for the pre-fix bug where %IX printed literally and desynchronised the
-     * following arguments. (%p here already emits its own "0x" prefix, so the
-     * format does not add a second one.) */
+     * following arguments. The format is the loader's real one, where the
+     * "0x" before %p is the only prefix: %p itself no longer adds one. */
     CHECK_SNF("mixed IX does not consume the next argument",
-              "site[1] RVA=0x1234  patchAddr=0x5678  stolen=2", 46, sizeof out,
-              "site[%d] RVA=0x%IX  patchAddr=%p  stolen=%d",
+              "site[1] RVA=0x1234  patchAddr=0x0000000000005678  stolen=2", 58,
+              sizeof out,
+              "site[%d] RVA=0x%IX  patchAddr=0x%p  stolen=%d",
               1, (unsigned long long)0x1234u, (void*)0x5678, 2);
     CHECK_SNF("mixed I32X does not consume the next argument",
               "0x1234 -7 0x42", 14, sizeof out, "0x%I32X %d 0x%IX",
@@ -318,13 +345,69 @@ static void test_i_length_modifier(void)
 
 #pragma GCC diagnostic pop
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat"
+
+/* MSVC's %p: no "0x" prefix, upper-case hex, zero-padded to the pointer width
+ * (16 digits on this x64 target), and NULL printed as all zeros. The width,
+ * precision and '#' expectations below follow the UCRT: it renders the pointer
+ * to 16 upper-case digits first, then applies width/precision/'0' as a string
+ * (so precision truncates and the '0' flag is ignored). Verified against the
+ * Windows UCRT under Wine, which the shim stands in for. */
 static void test_pointers(void)
 {
-    CHECK_SNF("p NULL", "0", 1, sizeof out, "%p", (void*)0);
-    CHECK_SNF("p nonzero", "0x1234", 6, sizeof out, "%p", (void*)0x1234);
-    CHECK_SNF("p high value", "0xdeadbeef", 10, sizeof out, "%p", (void*)0xDEADBEEF);
-    CHECK_SNF("p padded", " 0x1234", 7, sizeof out, "%7p", (void*)0x1234);
+    CHECK_SNF("p NULL", "0000000000000000", 16, sizeof out, "%p", (void*)0);
+    CHECK_SNF("p small value", "0000000000000042", 16, sizeof out, "%p",
+              (void*)0x42);
+    CHECK_SNF("p nonzero", "0000000000001234", 16, sizeof out, "%p",
+              (void*)0x1234);
+    CHECK_SNF("p high value", "DEADBEEFCAFEBABE", 16, sizeof out, "%p",
+              (void*)0xDEADBEEFCAFEBABEULL);
+    CHECK_SNF("p high partial", "00000000DEADBEEF", 16, sizeof out, "%p",
+              (void*)0xDEADBEEFu);
+
+    /* '#' is meaningful for %p: it prepends "0X" (upper-case, matching the
+     * digits), and NULL still gets no prefix. */
+    CHECK_SNF("p alt flag", "0X0000000000001234", 18, sizeof out, "%#p",
+              (void*)0x1234);
+    CHECK_SNF("p alt NULL has no prefix", "0000000000000000", 16, sizeof out,
+              "%#p", (void*)0);
+
+    /* Width pads with spaces and the '0' flag is ignored, because the pointer
+     * is rendered like a string. A width under the pointer width does nothing. */
+    CHECK_SNF("p width right", "    0000000000001234", 20, sizeof out, "%20p",
+              (void*)0x1234);
+    CHECK_SNF("p width left", "0000000000001234    ", 20, sizeof out, "%-20p",
+              (void*)0x1234);
+    CHECK_SNF("p width zero flag ignored", "    0000000000001234", 20, sizeof out,
+              "%020p", (void*)0x1234);
+    CHECK_SNF("p width below pointer width", "0000000000001234", 16, sizeof out,
+              "%4p", (void*)0x1234);
+
+    /* Precision is a maximum length on the rendered pointer, like %s: above
+     * the pointer width nothing is cut, below it the text is truncated. */
+    CHECK_SNF("p precision above pointer width", "0000000000001234", 16, sizeof out,
+              "%.20p", (void*)0x1234);
+    CHECK_SNF("p precision truncates", "DEAD", 4, sizeof out, "%.4p",
+              (void*)0xDEADBEEFCAFEBABEULL);
+    CHECK_SNF("p precision zero prints nothing", "", 0, sizeof out, "%.0p",
+              (void*)0x1234);
+    CHECK_SNF("p width and precision", "                0000", 20, sizeof out,
+              "%20.4p", (void*)0x1234);
+
+    /* The Mewjector crash line is "patchAddr=0x%p": with %p no longer emitting
+     * its own prefix, exactly one "0x" must survive in the output. */
+    {
+        int got;
+        fill_out();
+        got = snprintf(out, sizeof out, "patchAddr=0x%p", (void*)0x1234);
+        report(got == 28 && same_text(out, "patchAddr=0x0000000000001234") &&
+                   count_text(out, "0x") == 1,
+               "p crash line patchAddr=0x%p has exactly one 0x");
+    }
 }
+
+#pragma GCC diagnostic pop
 
 static void test_strings(void)
 {
@@ -513,6 +596,22 @@ static void test_snprintf_msvc(void)
                         (unsigned long long)0xBEEFu);
         report(got == 18 && same_text(buffer, "site[2] RVA=0xBEEF"),
                "_snprintf mixed %%d then %%IX consumes both arguments");
+    }
+    {
+        /* The exact loader crash line, through the exact entry point the
+         * loader uses: %IX and %p must each consume their own argument, and
+         * with %p adding no prefix the only "0x" occurrences are the two
+         * literals in the format (one before %IX, one before %p). */
+        char buffer[64];
+        int got;
+        got = _snprintf(buffer, sizeof buffer,
+                        "  site[%d] RVA=0x%IX  patchAddr=0x%p  stolen=%d", 1,
+                        (unsigned long long)0x1234u, (void*)0x42, 2);
+        report(got == 60 &&
+                   same_text(buffer,
+                             "  site[1] RVA=0x1234  patchAddr=0x0000000000000042  stolen=2") &&
+                   count_text(buffer, "0x") == 2,
+               "_snprintf formats the loader crash line");
     }
 }
 

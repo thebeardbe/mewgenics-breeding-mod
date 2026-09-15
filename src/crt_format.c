@@ -189,7 +189,7 @@ static size_t MewCrtFixedDouble(char* out, double value, unsigned precision)
 
 static void MewCrtEmitNumber(MewCrtSink* sink, const MewCrtSpec* spec,
                              unsigned long long magnitude, int negative, int signed_value,
-                             unsigned base, int upper, int pointer)
+                             unsigned base, int upper)
 {
     char digits[MEW_CRT_DIGITS_MAX];
     char prefix[4];
@@ -223,12 +223,7 @@ static void MewCrtEmitNumber(MewCrtSink* sink, const MewCrtSpec* spec,
         prefix[prefix_length++] = ' ';
     }
 
-    if (pointer && magnitude != 0)
-    {
-        prefix[prefix_length++] = '0';
-        prefix[prefix_length++] = 'x';
-    }
-    else if (spec->alt && base == 16U && magnitude != 0)
+    if (spec->alt && base == 16U && magnitude != 0)
     {
         prefix[prefix_length++] = '0';
         prefix[prefix_length++] = upper ? 'X' : 'x';
@@ -290,6 +285,32 @@ static void MewCrtEmitText(MewCrtSink* sink, const MewCrtSpec* spec,
     {
         MewCrtRepeat(sink, ' ', padding);
     }
+}
+
+/* MSVC renders %p in two stages: first as a fixed pointer-width field of
+ * uppercase hex digits, with a 0X prefix only when `#` is present and the
+ * value is non-zero, then that text is padded and truncated by width and
+ * precision as if it were a string. The zero flag does not apply. */
+static void MewCrtEmitPointer(MewCrtSink* sink, const MewCrtSpec* spec, void* pointer)
+{
+    unsigned long long magnitude = (unsigned long long)(UINT_PTR)pointer;
+    size_t field = 2U * sizeof(void*);
+    char digits[MEW_CRT_DIGITS_MAX];
+    char text[2U + 2U * sizeof(void*)];
+    size_t digit_length = MewCrtUnsignedDigits(digits, magnitude, 16U, 1);
+    size_t zero_count = field > digit_length ? field - digit_length : 0;
+    size_t length = 0;
+    size_t i;
+
+    if (spec->alt && magnitude != 0)
+    {
+        text[length++] = '0';
+        text[length++] = 'X';
+    }
+    for (i = 0; i < zero_count; i++) text[length++] = '0';
+    for (i = 0; i < digit_length; i++) text[length++] = digits[i];
+
+    MewCrtEmitText(sink, spec, text, length);
 }
 
 /* The sign comes from the sign bit, not from `value < 0.0`: an ordered
@@ -580,14 +601,14 @@ static int MewCrtVFormatNarrow(char* buffer, size_t size, const char* format, va
             {
                 int negative;
                 unsigned long long value = MewCrtReadUnsigned(&args, length, 1, &negative);
-                MewCrtEmitNumber(&sink, &spec, value, negative, 1, 10U, 0, 0);
+                MewCrtEmitNumber(&sink, &spec, value, negative, 1, 10U, 0);
                 break;
             }
             case 'u':
             {
                 int negative;
                 unsigned long long value = MewCrtReadUnsigned(&args, length, 0, &negative);
-                MewCrtEmitNumber(&sink, &spec, value, 0, 0, 10U, 0, 0);
+                MewCrtEmitNumber(&sink, &spec, value, 0, 0, 10U, 0);
                 break;
             }
             case 'x':
@@ -595,21 +616,20 @@ static int MewCrtVFormatNarrow(char* buffer, size_t size, const char* format, va
             {
                 int negative;
                 unsigned long long value = MewCrtReadUnsigned(&args, length, 0, &negative);
-                MewCrtEmitNumber(&sink, &spec, value, 0, 0, 16U, conversion == 'X', 0);
+                MewCrtEmitNumber(&sink, &spec, value, 0, 0, 16U, conversion == 'X');
                 break;
             }
             case 'o':
             {
                 int negative;
                 unsigned long long value = MewCrtReadUnsigned(&args, length, 0, &negative);
-                MewCrtEmitNumber(&sink, &spec, value, 0, 0, 8U, 0, 0);
+                MewCrtEmitNumber(&sink, &spec, value, 0, 0, 8U, 0);
                 break;
             }
             case 'p':
             {
                 void* pointer = va_arg(args, void*);
-                MewCrtEmitNumber(&sink, &spec, (unsigned long long)(UINT_PTR)pointer,
-                                 0, 0, 16U, 0, 1);
+                MewCrtEmitPointer(&sink, &spec, pointer);
                 break;
             }
             case 'c':
