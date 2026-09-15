@@ -153,7 +153,7 @@ jobs:
           exit "$status"
           BASH
 
-      - name: The bundle carries the patched loader
+      - name: The bundles carry the patched loader
         run: |
           set -euo pipefail
           # The build step builds the patched loader, but the shell checks run
@@ -165,47 +165,53 @@ jobs:
           fi
           echo "dist/chainloader.ini carries EnableEPFallback"
 
-      - name: Assemble the installer bundle
+      - name: Assemble the installer bundles
         run: |
           set -euo pipefail
           # GITHUB_REF_NAME is the tag on a tagged run ("v1.2.3"), the branch on
           # a branch push, and "<number>/merge" on a pull request. Slashes are
           # not good in a file name.
-          bundle="MewgenicsBreedingMod-install-${GITHUB_REF_NAME//\//-}.zip"
-          # The zip lands in release-artifacts/, which holds it and nothing else
-          # and is the exact directory the upload step names. Uploading that
-          # directory means the upload never depends on a glob matching in the
-          # workspace root: the one file in the directory is the one uploaded,
-          # whatever the ref made it be called.
+          ref="${GITHUB_REF_NAME//\//-}"
+          windows_bundle="MewgenicsBreedingMod-${ref}-windows.zip"
+          linux_bundle="MewgenicsBreedingMod-${ref}-linux.zip"
+          # Both zips land in release-artifacts/, which holds them and nothing
+          # else and is the exact directory the upload step names. Uploading
+          # that directory means the upload never depends on a glob matching in
+          # the workspace root.
           rm -rf release-bundle release-artifacts
-          mkdir -p release-bundle/payload release-bundle/windows release-bundle/linux release-artifacts
-          # One folder per platform, with the shared payload and the docs at the
-          # top: the three build artifacts in payload/, the Windows scripts in
-          # windows/, the Linux/Proton scripts in linux/, and the install README
-          # (installers/README.md becomes README.md here), PATCHES.md, and the
-          # vendored Mewjector licence at the root. Each script keeps its
-          # helpers beside it, so windows/ and linux/ each carry their own
-          # loader-release helper and linux/ carries proton-registry.sh. The
-          # root README is developer-facing and links to files that are not in
-          # the bundle, so it is not shipped.
-          cp dist/version.dll dist/chainloader.ini dist/BreedingSpike.dll release-bundle/payload/
-          cp installers/install.bat installers/install.ps1 installers/uninstall.bat installers/loader-release.ps1 release-bundle/windows/
-          cp installers/install.sh installers/uninstall.sh installers/loader-release.sh installers/proton-registry.sh release-bundle/linux/
-          cp installers/README.md installers/PATCHES.md release-bundle/
-          # Refresh the licence from the vendored source, so the shipped text
-          # always matches the revision the patched loader was built from.
-          cp vendor/upstream/mewjector/LICENSE release-bundle/MEWJECTOR-LICENSE.txt
-          (cd release-bundle && zip -X -q -r "../release-artifacts/$bundle" ./*)
-          echo "Bundle: release-artifacts/$bundle"
-          ls -l "release-artifacts/$bundle"
+          mkdir -p release-bundle/windows/docs release-bundle/windows/payload release-bundle/windows/scripts \
+                   release-bundle/linux/docs release-bundle/linux/payload release-bundle/linux/scripts \
+                   release-artifacts
+          # One self-contained folder per platform, with the entry script and
+          # its uninstaller at the root, the helpers under scripts/, the three
+          # build artifacts under payload/, and PATCHES.md, HOW-IT-WORKS.md and
+          # the vendored Mewjector licence under docs/. The root README carries
+          # only that platform's steps and points at docs/.
+          for platform in windows linux; do
+            cp dist/version.dll dist/chainloader.ini dist/BreedingSpike.dll "release-bundle/$platform/payload/"
+            cp installers/PATCHES.md installers/HOW-IT-WORKS.md "release-bundle/$platform/docs/"
+            # Refresh the licence from the vendored source, so the shipped text
+            # always matches the revision the patched loader was built from.
+            cp vendor/upstream/mewjector/LICENSE "release-bundle/$platform/docs/MEWJECTOR-LICENSE.txt"
+          done
+          cp installers/install.bat installers/uninstall.bat release-bundle/windows/
+          cp installers/install.ps1 installers/loader-release.ps1 release-bundle/windows/scripts/
+          cp installers/README-windows.md release-bundle/windows/README.md
+          cp installers/install.sh installers/uninstall.sh release-bundle/linux/
+          cp installers/loader-release.sh installers/proton-registry.sh release-bundle/linux/scripts/
+          cp installers/README-linux.md release-bundle/linux/README.md
+          (cd release-bundle/windows && zip -X -q -r "../../release-artifacts/$windows_bundle" ./*)
+          (cd release-bundle/linux && zip -X -q -r "../../release-artifacts/$linux_bundle" ./*)
+          echo "Bundles: release-artifacts/$windows_bundle release-artifacts/$linux_bundle"
+          ls -l release-artifacts
 
-      - name: Upload the installer bundle
+      - name: Upload the installer bundles
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # Same artifact name the release job downloads. The assembly step
-          # above leaves exactly one zip in release-artifacts/, so this uploads
-          # that directory wholesale; no pattern has to match.
-          name: MewgenicsBreedingMod-install
+          # above leaves exactly the two platform zips in release-artifacts/,
+          # so this uploads that directory wholesale; no pattern has to match.
+          name: MewgenicsBreedingMod-bundles
           path: release-artifacts/
           if-no-files-found: error
 
@@ -216,12 +222,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download the installer bundle
+      - name: Download the installer bundles
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          # The artifact the build job uploaded; it carries exactly one file,
-          # MewgenicsBreedingMod-install-<ref>.zip, at its root.
-          name: MewgenicsBreedingMod-install
+          # The artifact the build job uploaded; it carries exactly the two
+          # platform zips, MewgenicsBreedingMod-<ref>-windows.zip and
+          # MewgenicsBreedingMod-<ref>-linux.zip, at its root.
+          name: MewgenicsBreedingMod-bundles
           path: bundle
 
       - name: Create or update the GitHub Release
@@ -230,29 +237,36 @@ jobs:
           # The workflow's own token: no extra secret to configure.
           token: ${{ github.token }}
           fail_on_unmatched_files: true
-          # The single zip inside download-artifact's bundle/ directory, i.e.
-          # the file the build job put in release-artifacts/. Listing *.zip
-          # rather than repeating the ref-derived name keeps a tag containing a
-          # slash from silently mismatching the sanitized file name.
+          # Both zips inside download-artifact's bundle/ directory, i.e. the
+          # files the build job put in release-artifacts/. Listing *.zip rather
+          # than repeating the ref-derived names keeps a tag containing a slash
+          # from silently mismatching the sanitized file names. GitHub allows
+          # one release per tag, so both are assets of that release.
           files: bundle/*.zip
           body: |
             ## Mewgenics Breeding Mod ${{ github.ref_name }}
 
-            The installer bundle is
-            `MewgenicsBreedingMod-install-${{ github.ref_name }}.zip`.
+            Both platform bundles are attached to this release. Pick the one
+            for your system:
 
-            It contains, split by platform:
+            - `MewgenicsBreedingMod-${{ github.ref_name }}-windows.zip` for Windows
+            - `MewgenicsBreedingMod-${{ github.ref_name }}-linux.zip` for Linux and NixOS (Proton)
 
-            - `payload/`: `version.dll` and `chainloader.ini` (the Mewjector loader, patched with the startup-hang fix, PR #6, until it lands upstream) and `BreedingSpike.dll` (the mod)
-            - `windows/`: `install.bat`, `install.ps1`, `uninstall.bat`, `loader-release.ps1`
-            - `linux/`: `install.sh`, `uninstall.sh`, `proton-registry.sh`, `loader-release.sh`
-            - `README.md`: the install steps for both systems
-            - `PATCHES.md`: what the loader patch changes and why
-            - `MEWJECTOR-LICENSE.txt`: Mewjector's MIT licence
+            Each zip is self-contained and holds one platform's installers:
+
+            - the entry script (`install.bat` or `install.sh`) and its
+              uninstaller at the root, plus `README.md` with that platform's
+              install and uninstall steps,
+            - `scripts/`: the installer helpers,
+            - `payload/`: `version.dll` and `chainloader.ini` (the Mewjector
+              loader, patched with the startup-hang fix, PR #6, until it lands
+              upstream) and `BreedingSpike.dll` (the mod),
+            - `docs/`: `HOW-IT-WORKS.md`, `PATCHES.md`, and
+              `MEWJECTOR-LICENSE.txt` (Mewjector's MIT licence).
 
             The installer checks the latest official Mewjector release first
             and prefers it once it carries the fix; otherwise it uses the
-            patched loader in this bundle. Either way it prints which one it
+            patched loader in the bundle. Either way it prints which one it
             used.
 
             Unpack the zip anywhere, keep the folder together, and follow

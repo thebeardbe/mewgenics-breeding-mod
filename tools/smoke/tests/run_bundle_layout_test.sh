@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Tests for how install.sh and install.ps1 find their payload now that a release
-# bundle is organised into folders:
+# Tests for how install.sh and install.ps1 find their payload in the two older
+# bundle layouts that must keep working now that a release is one zip per
+# platform (see run_per_platform_bundle_test.sh and run_release_assembly_test.sh
+# for the current per-platform bundles):
+#
+# The legacy two-folder layout:
 #
 #   MewgenicsBreedingMod/
 #     README.md   PATCHES.md   MEWJECTOR-LICENSE.txt
 #     payload/    version.dll   chainloader.ini   BreedingSpike.dll
 #     windows/    install.bat   install.ps1   uninstall.bat   loader-release.ps1
 #     linux/      install.sh    uninstall.sh  loader-release.sh  proton-registry.sh
+#
+# and the flat unpack, where the scripts and the three artifacts share one
+# folder.
 #
 # Each script must use the three artifacts beside itself when all three are
 # there, otherwise the `payload` folder beside its own folder. Install,

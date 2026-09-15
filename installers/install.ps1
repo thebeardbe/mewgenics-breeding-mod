@@ -57,22 +57,27 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 # The bundle is meant to be unpacked whole. $PSScriptRoot holds this script and
-# its helpers; the payload may sit beside it or in ..\payload. $PSScriptRoot is
-# empty only for an interactive dot-source.
+# its helpers; the payload sits in a payload folder inside it, in a payload
+# folder beside it, or beside the script (see Get-ArtifactPath). $PSScriptRoot
+# is empty only for an interactive dot-source.
 $Script:SourceDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
-# Where the three artifacts live. The release bundle keeps them in payload/, a
-# folder beside this script's own folder (windows/ or linux/); a flat unpack
-# keeps them beside the script. A complete flat folder is taken as a whole,
-# whatever else is nearby; an incomplete one falls back to a per-artifact
-# search, so a flat folder merely missing one file still finds the two it has.
+# Where the three artifacts live. The release bundle puts this script in
+# scripts/ with the payload beside its parent folder, the root of the bundle;
+# the Linux installer sits at the root with the payload inside its own folder.
+# A flat unpack keeps the artifacts beside the script, and the older
+# windows/+linux/+payload/ layout keeps them one level up. The search order is:
+# a payload folder inside the script's folder, a payload folder beside it, then
+# the script's own folder.
 
-function Get-PayloadDir {
-    # The payload folder beside this script's own folder, when there is one.
-    # The release bundle has it; a flat unpack does not.
-    $payloadDir = Join-Path $Script:SourceDir '..\payload'
-    if (Test-Path -LiteralPath $payloadDir -PathType Container) { return $payloadDir }
-    return $null
+function Get-PayloadCandidates {
+    # The candidate folders, in search order. A complete flat folder still wins
+    # outright (see Get-ArtifactPath).
+    return @(
+        (Join-Path $Script:SourceDir 'payload'),
+        (Join-Path (Split-Path -Parent $Script:SourceDir) 'payload'),
+        $Script:SourceDir
+    )
 }
 
 function Test-AllArtifactsBesideScript {
@@ -89,23 +94,23 @@ function Test-AllArtifactsBesideScript {
 function Get-ArtifactPath {
     param([Parameter(Mandatory)][string]$Name)
     # A complete flat folder wins outright. Otherwise resolve this artifact in
-    # the payload folder first, so a release installs what it shipped even when
-    # a stray copy of it sits beside the script; fall back to the copy beside
-    # the script when the payload folder has none. When the artifact is
-    # nowhere, name the payload folder while that exists, otherwise the script
-    # folder, so the caller's error never names a folder that is not there.
+    # the payload candidates first, so a release installs what it shipped even
+    # when a stray copy of it sits beside the script; fall back to the copy
+    # beside the script when no payload folder has it. When the artifact is
+    # nowhere, name the first candidate folder that exists, so the caller's
+    # error never names a folder that is not there.
     if (Test-AllArtifactsBesideScript) {
         return (Join-Path $Script:SourceDir $Name)
     }
-    $payloadDir = Get-PayloadDir
-    if ($payloadDir) {
-        $candidate = Join-Path $payloadDir $Name
+    $candidates = Get-PayloadCandidates
+    foreach ($dir in $candidates) {
+        $candidate = Join-Path $dir $Name
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     }
-    $beside = Join-Path $Script:SourceDir $Name
-    if (Test-Path -LiteralPath $beside -PathType Leaf) { return $beside }
-    if ($payloadDir) { return (Join-Path $payloadDir $Name) }
-    return $beside
+    foreach ($dir in $candidates) {
+        if (Test-Path -LiteralPath $dir -PathType Container) { return (Join-Path $dir $Name) }
+    }
+    return (Join-Path $Script:SourceDir $Name)
 }
 
 # Source file in the bundle -> path under the game folder. One list keeps
@@ -131,8 +136,7 @@ if (-not (Test-Path -LiteralPath $Script:LoaderReleaseScript -PathType Leaf)) {
 function Get-ArtifactSource {
     param([Parameter(Mandatory)][string]$Name)
     # The loader files may come from a downloaded upstream release; the bundle
-    # itself resolves every artifact on its own, beside the script or in
-    # payload\ (see Get-ArtifactPath).
+    # itself resolves every artifact on its own (see Get-ArtifactPath).
     if ($Name -eq 'version.dll' -or $Name -eq 'chainloader.ini') {
         return (Join-Path (Get-LoaderSourceDir -Name $Name) $Name)
     }
@@ -333,7 +337,7 @@ function Assert-Payload {
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { $missing += $source }
     }
     if ($missing.Count -gt 0) {
-        Write-Fail 'the installer payload is incomplete. These files must sit beside install.ps1, or in a payload folder beside it:'
+        Write-Fail 'the installer payload is incomplete. These files were not found in a payload folder or beside install.ps1:'
         foreach ($path in $missing) { Write-Info $path }
         throw 'unpack the whole release folder before running this'
     }

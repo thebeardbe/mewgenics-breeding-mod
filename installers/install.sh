@@ -8,10 +8,15 @@
 #   ./install.sh --bundled-loader force the loader built into this bundle
 #
 # Set MEWGENICS_DIR instead of --game-dir if you prefer that. The three
-# artifacts (version.dll, chainloader.ini, BreedingSpike.dll) must sit in a
-# payload folder beside the script's folder, or beside this script. The loader is
-# a native proxy that shadows the system version.dll by living next to the game
-# exe; the mod DLL goes into mods/.
+# artifacts (version.dll, chainloader.ini, BreedingSpike.dll) are found by a
+# candidate search: a payload folder inside this script's folder, a payload
+# folder beside it, or beside this script (see payload_source_path). The loader
+# is a native proxy that shadows the system version.dll by living next to the
+# game exe; the mod DLL goes into mods/.
+#
+# In the release bundle this script sits at the root, so its helpers are in
+# scripts/; an older flat unpack or the windows/+linux/+payload/ layout keeps
+# them beside it. Both are found.
 #
 # The installer prefers the official Mewjector loader once it carries our
 # startup-hang fix; see loader-release.sh and PATCHES.md. --bundled-loader
@@ -23,19 +28,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Where the three artifacts live. The release bundle keeps them in payload/, a
-# folder beside this script's own folder (windows/ or linux/); a flat unpack
-# keeps them beside the script. A complete flat folder is taken as a whole,
-# whatever else is nearby; an incomplete one falls back to a per-artifact
-# search, so a flat folder merely missing one file still finds the two it has.
-
-# The payload folder beside this script's own folder, when there is one. The
-# release bundle has it; a flat unpack does not.
-payload_dir() {
-  if [ -d "$SCRIPT_DIR/../payload" ]; then
-    printf '%s\n' "$SCRIPT_DIR/../payload"
-  fi
-}
+# Where the three artifacts live. The release bundle puts this script at the
+# root beside payload/, so the payload is a folder inside the script's folder;
+# the PowerShell installer sits in scripts/ and finds the same payload beside
+# its parent folder. A flat unpack keeps the artifacts beside the script, and
+# the older windows/+linux/+payload/ layout keeps them one level up. The search
+# order is: a payload folder inside the script's folder, a payload folder beside
+# it, then the script's own folder.
 
 # True when every artifact sits beside the script: a complete self-contained
 # flat folder. That layout is what the user means to install, so it beats a
@@ -49,31 +48,31 @@ all_artifacts_beside_script() {
 }
 
 # Resolve one artifact. A complete flat folder wins outright. Otherwise prefer
-# the copy in the payload folder, so a release installs what it shipped even
-# when a stray copy of that artifact sits beside the script; fall back to the
-# copy beside the script when the payload folder has none. When the artifact is
-# nowhere, name the payload folder while that exists, otherwise the script
-# folder, so the caller's error never names a folder that is not there.
+# a payload folder, so a release installs what it shipped even when a stray copy
+# of that artifact sits beside the script; fall back to the copy beside the
+# script when no payload folder has it. When the artifact is nowhere, name the
+# first candidate folder that exists, so the caller's error never names a folder
+# that is not there.
 payload_source_path() {
-  local name="$1" payload
+  local name="$1" dir parent
   if all_artifacts_beside_script; then
     printf '%s/%s\n' "$SCRIPT_DIR" "$name"
     return 0
   fi
-  payload="$(payload_dir)"
-  if [ -n "$payload" ] && [ -f "$payload/$name" ]; then
-    printf '%s/%s\n' "$payload" "$name"
-    return 0
-  fi
-  if [ -f "$SCRIPT_DIR/$name" ]; then
-    printf '%s/%s\n' "$SCRIPT_DIR" "$name"
-    return 0
-  fi
-  if [ -n "$payload" ]; then
-    printf '%s/%s\n' "$payload" "$name"
-  else
-    printf '%s/%s\n' "$SCRIPT_DIR" "$name"
-  fi
+  parent="$(dirname "$SCRIPT_DIR")"
+  for dir in "$SCRIPT_DIR/payload" "$parent/payload" "$SCRIPT_DIR"; do
+    if [ -f "$dir/$name" ]; then
+      printf '%s/%s\n' "$dir" "$name"
+      return 0
+    fi
+  done
+  for dir in "$SCRIPT_DIR/payload" "$parent/payload" "$SCRIPT_DIR"; do
+    if [ -d "$dir" ]; then
+      printf '%s/%s\n' "$dir" "$name"
+      return 0
+    fi
+  done
+  printf '%s/%s\n' "$SCRIPT_DIR" "$name"
 }
 
 # Source file in the payload -> path under the game folder. One list keeps
@@ -116,19 +115,32 @@ ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 plan() { printf ' [dry] %s\n' "$*"; }
 
+# The release bundle keeps the helpers in scripts/; an older flat unpack or
+# the windows/+linux/+payload/ layout keeps them beside this script. Prefer
+# scripts/ so the bundle's own layout is the one that is used.
+helper_path() {
+  if [ -f "$SCRIPT_DIR/scripts/$1" ]; then
+    printf '%s\n' "$SCRIPT_DIR/scripts/$1"
+  else
+    printf '%s\n' "$SCRIPT_DIR/$1"
+  fi
+}
+
 # The Wine-registry override lives in its own file to keep this script small.
 # shellcheck source=./proton-registry.sh
-if [ ! -f "$SCRIPT_DIR/proton-registry.sh" ]; then
-  die "proton-registry.sh is missing from $SCRIPT_DIR"
+PROTON_REGISTRY="$(helper_path proton-registry.sh)"
+if [ ! -f "$PROTON_REGISTRY" ]; then
+  die "proton-registry.sh is missing (looked in $SCRIPT_DIR/scripts and $SCRIPT_DIR)"
 fi
-. "$SCRIPT_DIR/proton-registry.sh"
+. "$PROTON_REGISTRY"
 
 # Deciding between the bundled patched loader and the official upstream one
 # lives in its own file too, for the same reason.
-if [ ! -f "$SCRIPT_DIR/loader-release.sh" ]; then
-  die "loader-release.sh is missing from $SCRIPT_DIR"
+LOADER_RELEASE="$(helper_path loader-release.sh)"
+if [ ! -f "$LOADER_RELEASE" ]; then
+  die "loader-release.sh is missing (looked in $SCRIPT_DIR/scripts and $SCRIPT_DIR)"
 fi
-. "$SCRIPT_DIR/loader-release.sh"
+. "$LOADER_RELEASE"
 trap loader_release_cleanup EXIT
 
 while [ "$#" -gt 0 ]; do
@@ -340,7 +352,7 @@ check_payload() {
     fi
   done
   if [ "${#missing[@]}" -gt 0 ]; then
-    printf 'error: the installer payload is incomplete. These files must sit beside install.sh, or in a payload folder beside it:\n' >&2
+    printf 'error: the installer payload is incomplete. These files were not found in a payload folder or beside install.sh:\n' >&2
     printf '       %s\n' "${missing[@]}" >&2
     die "unpack the whole release folder before running this"
   fi

@@ -95,8 +95,8 @@ copy_windows_scripts() { # dir
   cp -p "$REPO_ROOT/installers/loader-release.ps1" "$dir/loader-release.ps1"
 }
 
-# The documented release layout: docs and payload/ at the root, scripts under
-# linux/ and windows/.
+# The legacy two-folder layout: docs and payload/ at the root, scripts in
+# linux/ and windows/. Still supported after the move to one zip per platform.
 make_release_layout() { # dir
   local dir="$1"
   mkdir -p "$dir/payload" "$dir/linux" "$dir/windows"

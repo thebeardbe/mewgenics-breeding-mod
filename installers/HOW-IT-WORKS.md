@@ -1,59 +1,13 @@
-# Installing the Breeding mod
+# How the installers work
 
-One-click installers for the standalone build. They put a Mewjector loader
-(`version.dll` and `chainloader.ini`) next to the game executable and our mod
-(`BreedingSpike.dll`) in the game's `mods/` folder.
+The detail behind the two installers. For the steps themselves, see the
+`README.md` in the bundle you unpacked.
 
-**Achievements stay ON.** Nothing here passes `-modpaths` or enables the debug
-console, the only two things the game checks before it turns Steam achievements
-off for a session.
+The standalone build places a Mewjector loader (`version.dll` and
+`chainloader.ini`) next to the game executable and our mod (`BreedingSpike.dll`)
+in the game's `mods/` folder so the overlay can follow the cat you select.
 
-Unpack the whole zip and keep the folder together:
-
-```
-MewgenicsBreedingMod/
-  README.md   PATCHES.md   MEWJECTOR-LICENSE.txt
-  payload/    version.dll   chainloader.ini   BreedingSpike.dll
-  windows/    install.bat   install.ps1   uninstall.bat   loader-release.ps1
-  linux/      install.sh    uninstall.sh  loader-release.sh  proton-registry.sh
-```
-
-A flat folder with the scripts and the three payload files together also works,
-which is handy to hand to a friend. A complete flat folder is used as it is,
-whatever else is nearby, so a stray `payload` folder cannot shadow it. When the
-folder is incomplete each script resolves every file on its own: the copy in a
-`payload` folder beside its own folder first, then the copy beside the script.
-
-## Install on Windows
-
-Double-click `windows\install.bat`, or run:
-
-```
-powershell -ExecutionPolicy Bypass -File windows\install.ps1
-```
-
-No registry changes and no Steam launch options are needed on Windows.
-
-## Install on Linux and NixOS (Proton)
-
-Run `./linux/install.sh`. Then set one Steam launch option, in
-`Steam -> Mewgenics -> Properties -> Launch Options`:
-
-```
-WINEDLLOVERRIDES="version=n,b" %command%
-```
-
-Start Mewgenics normally.
-
-## Uninstall
-
-Windows: double-click `windows\uninstall.bat`. Linux: run
-`./linux/uninstall.sh`. Both ask for confirmation first and name the game folder
-they are about to clean.
-
-## How it works
-
-### What the three files do
+## What the three files do
 
 - `version.dll` - the Mewjector loader, a proxy for the Windows `version` API:
   the game loads it as if it were the system DLL, and it then loads Mewjector
@@ -68,21 +22,49 @@ they are about to clean.
 
 `proton-registry.sh` is a helper sourced by `install.sh` (the optional Wine
 prefix override); `loader-release.sh` and `loader-release.ps1` are the helpers
-that decide between the bundled and upstream loaders. Keep every helper beside
-the script that uses it.
+that decide between the bundled and upstream loaders. The bundle keeps every
+helper in `scripts/`, beside the script that uses it.
 
-### Why the game finds the loader
+## Where the bundle keeps the files
+
+The zip is meant to be unpacked whole. The installer finds the three artifacts
+with a candidate search, in this order:
+
+1. a `payload` folder inside the installer script's own folder,
+2. a `payload` folder beside that folder,
+3. the script's own folder.
+
+A complete folder with all three files beside the installer (a flat unpack) is
+used as it is, whatever else is nearby, so a stray `payload` folder cannot
+shadow it. When the folder is incomplete each file is resolved on its own: the
+first candidate that has it wins, and a payload copy beats a stray copy beside
+the script. A missing file is reported at the folder the search actually
+reached, never at a folder that does not exist.
+
+The older flat layout and the older `windows/`+`linux/`+`payload/` layout both
+keep working: the helper lookup tries `scripts/` first and falls back to beside
+the entry script, and the payload search accepts a payload folder beside the
+script's parent folder.
+
+## Why the game finds the loader
 
 Windows searches the game folder before the system directory, so a native
 `version.dll` beside `Mewgenics.exe` shadows the system one. On Linux the game
 runs under Wine/Proton, which prefers its builtin `version.dll`, so the loader
-needs a DLL override (the launch option above).
+needs a DLL override (the launch option in the Linux README).
 
 The `,b` is required, not cosmetic: `version=n` alone forces our 64-bit DLL on
 every process in the prefix, the 32-bit ones fail to load it, and the game
 launch aborts silently. `,b` falls back to Wine's builtin elsewhere.
 
-### Where the loader comes from
+## Achievements stay ON
+
+Nothing here passes `-modpaths` or enables the debug console, the only two
+things the game checks before it turns Steam achievements off for a session.
+The mod is loaded beside the game and the mod DLL is read from `mods/`, so no
+achievement-disabling launch flag is involved.
+
+## Where the loader comes from
 
 The installer puts one of two loaders in the game folder and prints which one it
 used and why.
@@ -90,10 +72,10 @@ used and why.
 - **The official Mewjector release, downloaded over HTTPS.** The installer asks
   the official Mewjector GitHub release API for the latest release and accepts
   only an asset URL under
-  `https://github.com/githubuser508/mewjector/releases/download/`; any other
-  URL is refused. It then prints the source URL and the SHA-256 of the
-  installed `version.dll`, so you can compare that hash against the release you
-  expected (for example the one in a release note).
+  `https://github.com/githubuser508/mewjector/releases/download/`; any other URL
+  is refused. It then prints the source URL and the SHA-256 of the installed
+  `version.dll`, so you can compare that hash against the release you expected
+  (for example the one in a release note).
 - **The patched loader bundled with this installer.** This is the build in this
   zip, used while upstream does not yet carry the fix.
 
@@ -105,11 +87,11 @@ the loader it names, and the installer trusts whatever is there. Only set it to
 a loader you trust (your own build, or a release you fetched and checked
 yourself). The installer will not accept a loader from any other place.
 
-A relative `chainloader_ini=` path in an override metadata file resolves
-against that metadata file's own folder, the same as `directory=`, so the
-result does not depend on the folder you ran the installer from.
+A relative `chainloader_ini=` path in an override metadata file resolves against
+that metadata file's own folder, the same as `directory=`, so the result does
+not depend on the folder you ran the installer from.
 
-### Flags and dry runs
+## Flags and dry runs
 
 ```
 install.bat -DryRun                       # report only, change nothing
@@ -128,19 +110,20 @@ install and uninstall alike. The uninstall wrappers take it too
 (`uninstall.bat -DryRun`, `./uninstall.sh --dry-run`). A dry run never downloads
 a loader and never writes to a Proton prefix.
 
-### What a re-install does
+## What a re-install does
 
 The installer finds Mewgenics through the Steam library folders, backs up any
 file it replaces, skips files that are already up to date, and refuses to run
 while the game is open. Running it twice is harmless.
 
-### Writing the override into the Proton prefix
+## Writing the override into the Proton prefix
 
 Instead of the launch option, the script can write the same override into the
 game's Proton prefix (`compatdata/686060/pfx/user.reg`). It asks first and
-leaves the prefix alone if you say no.
+leaves the prefix alone if you say no. This is Linux only; Windows needs no
+registry change.
 
-### Undo an install
+## Undo an install
 
 After a successful install the installer writes a small record inside the game
 folder, `mods/.breeding-spike-installed`, listing the files it placed:

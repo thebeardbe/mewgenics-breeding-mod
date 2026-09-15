@@ -27,7 +27,8 @@ Usage: uninstall.sh [--dry-run] [--game-dir DIR]
   --game-dir DIR     use DIR as the game folder (overrides MEWGENICS_DIR)
   -h, --help         show this help
 
-The removal is done by install.sh --uninstall; see installers/README.md.
+The removal is done by install.sh --uninstall; see the bundle's README.md and
+docs/HOW-IT-WORKS.md.
 EOF
 }
 

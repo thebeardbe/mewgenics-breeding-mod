@@ -36,6 +36,8 @@ button.
 build.sh              build dist/version.dll + dist/BreedingSpike.dll
 flake.nix, shell.nix  dev shell (zig, python3, binutils, git)
 src/spike_mod.c       probe: MewSaveFile::Load (roster) + CatSelector::init (selection)
+src/save_diag.c       TEMPORARY one-shot save-path probe (read-only; runs once)
+src/mem_read.c        shared VirtualQuery pointer-readability check
 src/bridge_client.c   CRT-free Winsock sender: focus requests to the overlay
 src/shortcut_watcher.c always-on Ctrl+Shift+B watcher: raise the overlay in any mode
 src/crt_shim.c        KERNEL32-only mem/str/heap replacements for MewUI's CRT calls
@@ -70,15 +72,29 @@ GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)
 does the rest: it builds through the pinned Nix dev shell, fails if either DLL
 imports anything but `KERNEL32.dll`, runs the shell checks the repository ships
 (every executable shell script under a `tests/` directory, run inside the dev
-shell with Wine available), packs the installer bundle, and publishes it on the
+shell with Wine available), assembles both platform bundles, and publishes them
+on the
 [releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
 
-That bundle is `MewgenicsBreedingMod-install-vX.Y.Z.zip`. It puts the three
-files from `dist/` (including the patched loader) in `payload/`, the Windows
-scripts in `windows/`, the Linux/Proton scripts in `linux/`, and `README.md`
-(the install guide), `PATCHES.md`, and the Mewjector licence at the top. Each
-script keeps its helpers beside it. Pushes and pull requests to `master` run the
-same build, but only a tag creates a release.
+Each tag gets one release with two assets, one bundle per platform:
+
+- `MewgenicsBreedingMod-vX.Y.Z-windows.zip`
+- `MewgenicsBreedingMod-vX.Y.Z-linux.zip`
+
+Each zip is self-contained for its platform:
+
+```
+install.bat / install.sh        entry script
+uninstall.bat / uninstall.sh    uninstaller
+scripts/                        installer helpers (install.ps1, loader-release.*, proton-registry.sh)
+payload/                        version.dll, chainloader.ini, BreedingSpike.dll
+docs/                           HOW-IT-WORKS.md, PATCHES.md, MEWJECTOR-LICENSE.txt
+README.md                       that platform's install and uninstall steps
+```
+
+The `payload/`, `docs/` and `README.md` are the same in both; only the entry
+scripts and helpers differ. Pushes and pull requests to `master` run the same
+build, but only a tag creates a release.
 
 A shell check is any executable shell script under a `tests/` directory; CI
 discovers and runs all of them with the cross-compiler and Wine available, so a
@@ -108,65 +124,22 @@ checks `mod_logs/chainloader.log`.
 
 ## Install
 
-The mod ships as `MewgenicsBreedingMod-install-vX.Y.Z.zip` (tagged releases;
-see [Release](#release)). It holds the three mod files (`version.dll`,
-`chainloader.ini`, `BreedingSpike.dll`) in `payload/`, a `windows/` and a
-`linux/` folder for the two installers, and the install steps in the bundle's
-`README.md`. Unpack it anywhere and keep the folder together. Releases publish
-it on the
-[releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases).
-None is published yet, so until one is you can build the same zip yourself:
-`./build.sh --patched`, then lay out the three files from `dist/` and the
-installers as the [release workflow](.github/workflows/release.yml) does.
+The mod ships as two platform downloads on the
+[releases page](https://github.com/thebeardbe/mewgenics-breeding-mod/releases):
 
-### The loader
+- **Windows:** `MewgenicsBreedingMod-vX.Y.Z-windows.zip`
+- **Linux and NixOS (Proton):** `MewgenicsBreedingMod-vX.Y.Z-linux.zip`
 
-`version.dll` is [Mewjector](https://github.com/githubuser508/mewjector), the
-loader that reads `chainloader.ini` and loads the mods. The official Mewjector
-v3.4 loader hangs on some Proton/Wine launches, so this bundle ships a patched
-build with the fix from
-[Mewjector PR #6](https://github.com/githubuser508/mewjector/pull/6). That fix
-has not landed upstream yet.
+Pick your platform, unpack the zip, keep the folder together, and follow the
+`README.md` inside it. That README has only your platform's install and
+uninstall steps and points at the bundle's `docs/`: `docs/HOW-IT-WORKS.md` for
+the loader, the three files, dry runs, re-installing, uninstalling, and where
+the loader came from; `docs/PATCHES.md` for the loader patch and the upstream
+PR; and `docs/MEWJECTOR-LICENSE.txt` for Mewjector's MIT licence.
 
-The installer checks the latest official Mewjector release first. If its
-`chainloader.ini` already contains `EnableEPFallback`, the installer downloads
-that release and uses its loader and ini; otherwise it uses the patched loader
-in this bundle. Either way it prints which loader it used and the reason, next
-to the achievements line. Pass `--bundled-loader` (`install.sh`) or
-`-BundledLoader` (`install.bat -BundledLoader`) to always use the bundled
-patched loader. All of this is in `PATCHES.md` in the bundle.
-
-### Windows
-
-1. Unpack the zip.
-2. Double-click `install.bat`.
-3. Start Mewgenics normally. Windows needs no launch option and no registry
-   change.
-4. To undo, double-click `uninstall.bat`.
-
-### Linux and NixOS (Proton)
-
-1. Unpack the zip.
-2. Run `./install.sh` in a terminal.
-3. Set this Steam launch option (Mewgenics -> Properties -> Launch Options):
-
-   ```
-   WINEDLLOVERRIDES="version=n,b" %command%
-   ```
-
-   Wine prefers its own `version.dll`, so this override is what makes the game
-   load ours. The `,b` matters just as much; see Proton constraints above.
-4. Start Mewgenics normally.
-5. To undo, run `./uninstall.sh`.
-
-### Uninstall and dry runs
-
-Both uninstallers ask for confirmation first and name the game folder, remove
-only the files the installer recorded, and put back anything it replaced from
-its timestamped backup. Declining, or running one twice, removes nothing. Both
-refuse to run while Mewgenics is open. `-DryRun` (Windows) and `--dry-run`
-(Linux) report what would happen and change nothing, for install and uninstall
-alike.
+No release is published yet, so until one is you can build the same bundles
+yourself: `./build.sh --patched`, then lay out the files as the
+[release workflow](.github/workflows/release.yml) does.
 
 **Achievements stay ON** for this standalone mod: nothing in the zip passes
 `-modpaths` or enables the debug console, the only two things the game checks
@@ -175,7 +148,7 @@ before it turns Steam achievements off for the session.
 After a launch, `<game folder>/mod_logs/chainloader.log` shows a banner, the hook
 install line and one `cat key=... sqlKey=... name="..."` line per cat loaded.
 Placing the files by hand, the flags, and what each file does are all in
-[`installers/README.md`](installers/README.md).
+[`installers/HOW-IT-WORKS.md`](installers/HOW-IT-WORKS.md).
 
 ## Achievement note
 

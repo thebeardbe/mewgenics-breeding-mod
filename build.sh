@@ -95,7 +95,7 @@ build_mod() {
   echo "==> BreedingSpike.dll (CRT-free, KERNEL32-only, MewUI mode $MEWUI_MODE)"
   # Every mode links our own sources, KERNEL32, and the Mewjector header. Mode 0
   # is the pre-MewUI DLL: no mew_ui_api.o, no shim, no compiler-rt.
-  local sources=(src/spike_mod.c src/bridge_client.c src/shortcut_watcher.c)
+  local sources=(src/spike_mod.c src/bridge_client.c src/shortcut_watcher.c src/mem_read.c src/save_diag.c)
   local objects=()
   local include_dirs=(-I"$UP/mewjector" -Isrc)
   local libs=(-lkernel32)

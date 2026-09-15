@@ -13,9 +13,12 @@ rem instead of a guess.
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-if not exist "%~dp0install.ps1" (
-  echo error: install.ps1 is missing from "%~dp0"
-  echo        unpack the whole release folder before running this.
+rem The bundle keeps install.ps1 in scripts\; an older flat unpack keeps it
+rem beside this wrapper. Prefer scripts\, fall back to beside.
+set "INSTALL_PS1=%~dp0scripts\install.ps1"
+if not exist "%INSTALL_PS1%" set "INSTALL_PS1=%~dp0install.ps1"
+if not exist "%INSTALL_PS1%" (
+  echo error: install.ps1 is missing. Unpack the whole release folder before running this.
   pause
   exit /b 1
 )
@@ -55,7 +58,7 @@ set "ARGS="
 if defined GAMEDIR set ARGS=-GameDir "%GAMEDIR%"
 set "DRYRUNARG="
 if defined DRYRUN set "DRYRUNARG=-DryRun"
-set PS=powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1"
+set PS=powershell -NoProfile -ExecutionPolicy Bypass -File "%INSTALL_PS1%"
 
 set "REPORT=%TEMP%\mewgenics-uninstall-%RANDOM%%RANDOM%.txt"
 %PS% -Uninstall -DryRun %ARGS% > "%REPORT%" 2>&1
