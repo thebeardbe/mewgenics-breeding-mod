@@ -4,7 +4,12 @@
  * One worker thread owns the socket and loops:
  *   - send the pending focus key, if any
  *   - select() with a short timeout, then recv() when readable
- *   - dispatch each complete line to the select callback
+ *   - record each complete select line as a pending key
+ *
+ * The worker never touches game state and never calls into the game. The game
+ * thread drains a queued select on its own scene-ready tick (see
+ * bridge_client_drain_pending_select), so the game calls run on the thread the
+ * game owns.
  *
  * On any socket error the connection is dropped and retried, so the overlay can
  * be started, stopped or restarted freely. Nothing here blocks the game.
@@ -52,6 +57,7 @@ static int g_port = BRIDGE_DEFAULT_PORT;
 static SOCKET g_sock = INVALID_SOCKET;
 static volatile LONG64 g_pending_key;         /* latest focus key, 0 = none */
 static volatile LONG64 g_pending_raise_key;   /* latest raise key, 0 = none */
+static volatile LONG64 g_pending_select_key;  /* latest overlay select, 0 = none */
 static LONG g_started;
 static LONG g_reported_down;            /* log once per connection state */
 
@@ -104,6 +110,22 @@ static int AppendInt64(char* dst, int pos, int64_t value) {
     if (negative) dst[pos++] = '-';
     while (n > 0) dst[pos++] = digits[--n];
     return pos;
+}
+
+/* Log "bridge: select <side> (thread=<tid>) key=<key>" with the calling
+ * thread's id, so the log itself proves which thread recorded or drained the
+ * request. No CRT: the numbers are formatted by hand. */
+static void LogSelectSide(const char* side, int64_t key) {
+    char message[128];
+    int pos = 0;
+    pos = Append(message, pos, "bridge: select ");
+    pos = Append(message, pos, side);
+    pos = Append(message, pos, " (thread=");
+    pos = AppendInt64(message, pos, (int64_t)GetCurrentThreadId());
+    pos = Append(message, pos, ") key=");
+    pos = AppendInt64(message, pos, key);
+    message[pos] = '\0';
+    LogLine(message);
 }
 
 /* ── connection ──────────────────────────────────────────────────────────── */
@@ -190,8 +212,11 @@ static int ParseSelectKey(const char* line, int length, int64_t* out_key) {
 
 static void DispatchLine(const char* line, int length) {
     int64_t key;
-    if (ParseSelectKey(line, length, &key) && g_on_select) {
-        g_on_select(key);
+    /* Record the newest request only. The worker never touches game state; the
+     * game thread consumes this (bridge_client_drain_pending_select). */
+    if (ParseSelectKey(line, length, &key) && key != 0) {
+        InterlockedExchange64(&g_pending_select_key, key);
+        LogSelectSide("recorded by worker", key);
     }
 }
 
@@ -290,4 +315,14 @@ void bridge_client_send_key(int64_t key) {
 void bridge_client_send_raise(int64_t key) {
     if (!g_started || key == 0) return;
     InterlockedExchange64(&g_pending_raise_key, key);
+}
+
+int bridge_client_drain_pending_select(void) {
+    /* InterlockedExchange clears the slot as it reads, so one call consumes at
+     * most one request and a later request cannot be drained twice. */
+    int64_t key = (int64_t)InterlockedExchange64(&g_pending_select_key, 0);
+    if (key == 0) return 0;
+    LogSelectSide("drained by game", key);
+    if (g_on_select) g_on_select(key);
+    return 1;
 }

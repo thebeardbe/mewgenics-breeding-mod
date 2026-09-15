@@ -2,7 +2,7 @@
  * BreedingSpike — probe for the Mewgenics Breeding Overlay bridge.
  *
  * Scope: prove the in-game side of the bridge without touching the save or
- * game state. Two hooks:
+ * game state. Hooks:
  *
  *   1. glaiel::MewSaveFile::Load(__int64 key, CatData& out) at RVA 0x230060.
  *      Logs the roster (key, sqlKey, name) at save load and proves that the
@@ -15,6 +15,11 @@
  *      which the game itself passes to its CatDatabase lookup, and its CatData
  *      lands at +0x8A8. This is the id the CatMenu shows, so this hook is where
  *      a "send to the breeding manager" button belongs.
+ *
+ *   3. The scene-ready update pass at RVA 0x96AC50 (15 stolen bytes). The bridge
+ *      worker only records an overlay select request; this hook runs on the game
+ *      thread and drains one request per tick, so every game call happens on the
+ *      thread the game owns.
  *
  * On a selection the key is logged and sent to the overlay over loopback TCP.
  *
@@ -79,6 +84,21 @@
  * entries, so they are not used here. */
 #define RVA_OPEN_CAT_DETAIL 0xEC7B0u
 
+/* Scene-ready update pass at RVA 0x96AC50 (15 stolen bytes): the game's own
+ * per-scene update entry, called on the game thread. MewUI hooks the same site.
+ * Draining overlay select requests here keeps the game calls on the game
+ * thread instead of the bridge worker. */
+#define RVA_SCENE_READY_UPDATE 0x96AC50u
+#define SCENE_READY_STOLEN_BYTES 15
+/* Lower runs first. A distinct slot from MewUI's own scene-ready hook and from
+ * the probe default so the chain log names this hook separately. */
+#define SCENE_READY_HOOK_PRIORITY 40
+#define SCENE_READY_HOOK_OWNER "BreedingSpike-select"
+
+/* All the plain probes share one priority; it only orders them against other
+ * mods hooking the same RVA. */
+#define PROBE_HOOK_PRIORITY 20
+
 /* House cat list: the scene's component array is at manager+0x20, one entry per
  * type (0x10 bytes each). Type 0x448 is the House cat list: count at +0xc,
  * pointer array at +0x10, entries are cats with their key at +0x80. */
@@ -122,6 +142,10 @@ static fn_cat_ui_setup g_orig_cat_ui_setup = NULL;
  * It sets the current cat and opens the detail pane in one call. */
 typedef void (__cdecl *fn_open_cat_detail)(void* house, void* cat);
 static fn_open_cat_detail g_open_cat_detail = NULL;
+
+/* The scene-ready update trampoline (the next hook in Mewjector's chain). */
+typedef void (__fastcall *fn_scene_ready_update)(void* scene_manager);
+static fn_scene_ready_update g_orig_scene_ready_update = NULL;
 
 /* The CatMenu controller, cached when the game sets up the cat UI. */
 static void* volatile g_house = NULL;
@@ -360,6 +384,17 @@ static void OnSelectCommand(int64_t key) {
     SelectCatByKey(key);
 }
 
+/* ── hook 4: drain overlay select requests on the game thread ───────────── */
+
+/* Runs on the game thread at the scene-ready update pass. The bridge worker
+ * only records the newest select key; here, once per tick, at most one request
+ * is drained and the existing select-and-open work happens on this thread.
+ * Chain convention: pass through to the trampoline first, then do our work. */
+static void __fastcall HookSceneReady(void* scene_manager) {
+    if (g_orig_scene_ready_update) g_orig_scene_ready_update(scene_manager);
+    bridge_client_drain_pending_select();
+}
+
 /* ── in-game shortcut (all modes, including mode 0) ─────────────────────── */
 
 /* Atomic read: the watcher thread reads the key the game thread cached in
@@ -506,8 +541,9 @@ static void __cdecl OnUiTick(void* user_data) {
 #endif /* MEWUI_MODE >= 1 */
 
 static void InstallProbe(const char* label, UINT_PTR rva, int stolen,
-                         void* hook, void** trampoline_out) {
-    int ok = g_mj.InstallHook(rva, stolen, hook, trampoline_out, 20, MOD_NAME);
+                         void* hook, void** trampoline_out,
+                         int priority, const char* owner) {
+    int ok = g_mj.InstallHook(rva, stolen, hook, trampoline_out, priority, owner);
     if (!ok) {
         SAY("FATAL: InstallHook(%s rva=0x%X) failed; probe disabled", label, (unsigned)rva);
         return;
@@ -544,13 +580,20 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
 
         InstallProbe("save-load", RVA_MEWSAVEFILE_LOAD_CATDATA,
                      MEWSAVEFILE_LOAD_STOLEN_BYTES, (void*)HookLoadCatData,
-                     (void**)&g_orig_load_catdata);
+                     (void**)&g_orig_load_catdata,
+                     PROBE_HOOK_PRIORITY, MOD_NAME);
         InstallProbe("current-cat", RVA_SET_CURRENT_CAT, 0,
                      (void*)HookSetCurrentCat,
-                     (void**)&g_orig_set_current_cat);
+                     (void**)&g_orig_set_current_cat,
+                     PROBE_HOOK_PRIORITY, MOD_NAME);
         InstallProbe("cat-ui-setup", RVA_CAT_UI_SETUP, CAT_UI_SETUP_STOLEN_BYTES,
                      (void*)HookCatUiSetup,
-                     (void**)&g_orig_cat_ui_setup);
+                     (void**)&g_orig_cat_ui_setup,
+                     PROBE_HOOK_PRIORITY, MOD_NAME);
+        InstallProbe("scene-ready", RVA_SCENE_READY_UPDATE, SCENE_READY_STOLEN_BYTES,
+                     (void*)HookSceneReady,
+                     (void**)&g_orig_scene_ready_update,
+                     SCENE_READY_HOOK_PRIORITY, SCENE_READY_HOOK_OWNER);
 
         bridge_client_start(45780, BridgeLog, OnSelectCommand);
 
